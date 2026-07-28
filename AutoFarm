@@ -1,0 +1,402 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local VirtualUser = game:GetService("VirtualUser")
+local Lighting = game:GetService("Lighting")
+local CoreGui = game:GetService("CoreGui")
+local StarterGui = game:GetService("StarterGui")
+
+local LocalPlayer = Players.LocalPlayer
+
+pcall(function()
+    settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+    Lighting.GlobalShadows = false
+    Lighting.FogEnd = 9e9
+    Lighting.Brightness = 1
+    Lighting.ClockTime = 0
+    Lighting.Ambient = Color3.new(0, 0, 0)
+    Lighting.OutdoorAmbient = Color3.new(0, 0, 0)
+    workspace.GlobalWind = Vector3.zero
+    
+    local terrain = workspace:FindFirstChildWhichIsA("Terrain")
+    if terrain then
+        terrain.WaterWaveSize = 0
+        terrain.WaterWaveSpeed = 0
+        terrain.WaterReflectance = 0
+        terrain.WaterTransparency = 1
+        terrain.Decoration = false
+    end
+end)
+
+local function clearSky()
+    pcall(function()
+        for _, v in ipairs(Lighting:GetChildren()) do
+            if v:IsA("Sky") then
+                v:Destroy()
+            end
+        end
+        local newSky = Instance.new("Sky")
+        newSky.CelestialBodiesShown = false
+        newSky.StarCount = 0
+        newSky.SkyboxBk = "rbxassetid://0"
+        newSky.SkyboxDn = "rbxassetid://0"
+        newSky.SkyboxFt = "rbxassetid://0"
+        newSky.SkyboxLf = "rbxassetid://0"
+        newSky.SkyboxRt = "rbxassetid://0"
+        newSky.SkyboxUp = "rbxassetid://0"
+        newSky.Parent = Lighting
+    end)
+end
+
+clearSky()
+
+pcall(function()
+    StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.PlayerList, false)
+    StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Chat, true)
+    StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Backpack, false)
+    StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.EmotesMenu, false)
+    StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Health, false)
+end)
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "BlackScreenOverlay"
+screenGui.IgnoreGuiInset = true
+screenGui.DisplayOrder = -1
+screenGui.ResetOnSpawn = false
+
+local blackBackground = Instance.new("Frame")
+blackBackground.Size = UDim2.new(1, 0, 1, 0)
+blackBackground.BackgroundColor3 = Color3.new(0, 0, 0)
+blackBackground.BorderSizePixel = 0
+blackBackground.Parent = screenGui
+
+local coinCounterLabel = Instance.new("TextLabel")
+coinCounterLabel.Size = UDim2.new(0, 400, 0, 100)
+coinCounterLabel.Position = UDim2.new(0.5, -200, 0.5, -50)
+coinCounterLabel.BackgroundTransparency = 1
+coinCounterLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
+coinCounterLabel.TextScaled = true
+coinCounterLabel.FontFace = Font.new("rbxasset://fonts/families/FredokaOne.json")
+coinCounterLabel.Text = "0"
+coinCounterLabel.ZIndex = 2
+coinCounterLabel.Parent = screenGui
+
+pcall(function()
+    if syn and syn.protect_gui then
+        syn.protect_gui(screenGui)
+        screenGui.Parent = CoreGui
+    elseif gethui then
+        screenGui.Parent = gethui()
+    else
+        screenGui.Parent = CoreGui
+    end
+end)
+
+local totalCollectedCoins = 0
+local lastRawVal = 0
+local hasInitializedRaw = false
+
+task.spawn(function()
+    while true do
+        task.wait(0.05)
+        pcall(function()
+            local uiText = LocalPlayer.PlayerGui.MainGUI.Game.CoinBags.Container.Coin.CurrencyFrame.Icon.Coins.Text
+            local currentVal = tonumber(uiText)
+            if currentVal then
+                if not hasInitializedRaw then
+                    lastRawVal = currentVal
+                    hasInitializedRaw = true
+                else
+                    if currentVal > lastRawVal then
+                        local diff = currentVal - lastRawVal
+                        totalCollectedCoins = totalCollectedCoins + diff
+                        coinCounterLabel.Text = tostring(totalCollectedCoins)
+                    elseif currentVal < lastRawVal then
+                        -- Reset happened, update base tracking without negative subtraction
+                    end
+                    lastRawVal = currentVal
+                end
+            end
+        end)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        pcall(function()
+            for _, gui in ipairs(LocalPlayer.PlayerGui:GetDescendants()) do
+                if gui:IsA("GuiObject") and gui ~= screenGui and not gui:IsDescendantOf(screenGui) then
+                    local nameLower = gui.Name:lower()
+                    local fullNameLower = gui:GetFullName():lower()
+                    
+                    local isExempt = nameLower:find("chat") or 
+                                     nameLower:find("topbar") or 
+                                     nameLower:find("menu") or 
+                                     nameLower:find("escape") or 
+                                     nameLower:find("core") or 
+                                     nameLower:find("settings") or
+                                     fullNameLower:find("chat") or
+                                     fullNameLower:find("topbar") or
+                                     fullNameLower:find("encurrency")
+                                     
+                    if not isExempt then
+                        if gui.Visible then
+                            gui.Visible = false
+                        end
+                    end
+                end
+            end
+        end)
+    end
+end)
+
+LocalPlayer.Idled:Connect(function()
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new(0, 0))
+    end)
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(30)
+        pcall(function()
+            VirtualUser:Button1Down(Vector2.new(0, 0))
+            task.wait(0.05)
+            VirtualUser:Button1Up(Vector2.new(0, 0))
+        end)
+    end
+end)
+
+RunService.Stepped:Connect(function()
+    local char = LocalPlayer.Character
+    if char then
+        for _, v in ipairs(char:GetDescendants()) do
+            if v:IsA("BasePart") then
+                v.CanCollide = false
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while task.wait(3) do
+        pcall(function()
+            Lighting.GlobalShadows = false
+            Lighting.FogEnd = 9e9
+            Lighting.Brightness = 1
+            Lighting.ClockTime = 0
+            Lighting.Ambient = Color3.new(0, 0, 0)
+            Lighting.OutdoorAmbient = Color3.new(0, 0, 0)
+            
+            for _, v in ipairs(Lighting:GetDescendants()) do
+                if v:IsA("PostEffect") or v:IsA("Atmosphere") or v:IsA("BloomEffect") or v:IsA("BlurEffect") or v:IsA("ColorCorrectionEffect") or v:IsA("DepthOfFieldEffect") or v:IsA("SunRaysEffect") then
+                    v:Destroy()
+                elseif v:IsA("Sky") then
+                    if v.StarCount > 0 or v.CelestialBodiesShown then
+                        v.StarCount = 0
+                        v.CelestialBodiesShown = false
+                    end
+                end
+            end
+
+            for _, v in ipairs(workspace:GetDescendants()) do
+                if v:IsA("BasePart") then
+                    local parent = v.Parent
+                    local isCharacter = parent and (parent:FindFirstChild("Humanoid") or (parent.Parent and parent.Parent:FindFirstChild("Humanoid")))
+                    local vName = v.Name
+                    local isCoin = vName == "Coin_Server" or vName == "CoinContainer" or vName:lower():find("coin") or vName:lower():find("bag") or (parent and (parent.Name == "CoinContainer" or parent.Name:lower():find("coin")))
+                    
+                    if not isCharacter and not isCoin and parent and not parent:IsA("Accessory") then
+                        if v.Transparency ~= 1 or v.Material ~= Enum.Material.SmoothPlastic or v.CastShadow then
+                            v.Material = Enum.Material.SmoothPlastic
+                            v.Reflectance = 0
+                            v.Transparency = 1
+                            v.CastShadow = false
+                        end
+                    end
+                elseif v:IsA("Texture") or v:IsA("Decal") or v:IsA("ParticleEmitter") or v:IsA("Fire") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Trail") or v:IsA("Beam") or v:IsA("SpotLight") or v:IsA("PointLight") or v:IsA("SurfaceLight") then
+                    v:Destroy()
+                end
+            end
+        end)
+    end
+end)
+
+local function getCoinContainer()
+    for _, v in ipairs(workspace:GetDescendants()) do
+        if v.Name == "CoinContainer" then
+            return v
+        end
+    end
+    return nil
+end
+
+local function isPlayerInGame()
+    local container = getCoinContainer()
+    if not container then return false end
+    
+    local hasCoins = false
+    for _, v in ipairs(container:GetDescendants()) do
+        if v.Name == "Coin_Server" and v:IsA("BasePart") then
+            hasCoins = true
+            break
+        end
+    end
+    
+    local bagsGui = nil
+    pcall(function()
+        bagsGui = LocalPlayer.PlayerGui.MainGUI.Game.CoinBags
+    end)
+    
+    return hasCoins and (bagsGui ~= nil)
+end
+
+local function getBestCoin(container)
+    if not container then return nil end
+    
+    local bestCoin = nil
+    local maxMinPlayerDist = -math.huge
+
+    for _, v in ipairs(container:GetDescendants()) do
+        if v.Name == "Coin_Server" and v:IsA("BasePart") then
+            local minDistToAnyPlayer = math.huge
+            
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= LocalPlayer and player.Character then
+                    local char = player.Character
+                    local hrp = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
+                    if hrp then
+                        local dist = (hrp.Position - v.Position).Magnitude
+                        if dist < minDistToAnyPlayer then
+                            minDistToAnyPlayer = dist
+                        end
+                    end
+                end
+            end
+
+            if minDistToAnyPlayer == math.huge then
+                minDistToAnyPlayer = 999999
+            end
+
+            if minDistToAnyPlayer > maxMinPlayerDist then
+                maxMinPlayerDist = minDistToAnyPlayer
+                bestCoin = v
+            end
+        end
+    end
+
+    return bestCoin
+end
+
+local lobbyCFrame = CFrame.new(4.58875275, -63.8402214, -137.275848, -0.998817801, -0.0115540512, -0.047218211, -0.0121162953, 0.999858856, 0.0116383433, 0.0470770709, 0.0121967029, -0.998816788)
+
+local function hardReset()
+    pcall(function()
+        local char = LocalPlayer.Character
+        if char then
+            local humanoid = char:FindFirstChildOfClass("Humanoid")
+            if humanoid and humanoid.Health > 0 then
+                humanoid.Health = 0
+            end
+        end
+    end)
+end
+
+task.spawn(function()
+    while true do
+        local char = LocalPlayer.Character
+        local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+        if not char or not humanoid or not hrp or humanoid.Health <= 0 then
+            hasInitializedRaw = false
+            task.wait(0.05)
+            continue
+        end
+
+        local floatForce = hrp:FindFirstChild("FloatForce")
+        if not floatForce then
+            floatForce = Instance.new("BodyVelocity")
+            floatForce.Name = "FloatForce"
+            floatForce.MaxForce = Vector3.new(100000, 100000, 100000)
+            floatForce.Velocity = Vector3.new(0, 0, 0)
+            floatForce.Parent = hrp
+        else
+            floatForce.MaxForce = Vector3.new(100000, 100000, 100000)
+            floatForce.Velocity = Vector3.new(0, 0, 0)
+        end
+
+        humanoid.PlatformStand = true
+
+        if not isPlayerInGame() then
+            hrp.CFrame = lobbyCFrame * CFrame.Angles(math.rad(-90), 0, 0)
+            hasInitializedRaw = false
+            task.wait(0.05)
+            continue
+        end
+
+        local container = getCoinContainer()
+        
+        local isFull = false
+        pcall(function()
+            local uiText = LocalPlayer.PlayerGui.MainGUI.Game.CoinBags.Container.Coin.CurrencyFrame.Icon.Coins.Text
+            local val = tonumber(uiText)
+            if val and val >= 40 then
+                isFull = true
+            end
+        end)
+
+        if not container or isFull then
+            if isFull then
+                task.wait(1)
+            end
+            hardReset()
+            task.wait(0.1)
+            continue
+        end
+
+        local targetCoin = getBestCoin(container)
+        if not targetCoin then
+            hrp.CFrame = lobbyCFrame * CFrame.Angles(math.rad(-90), 0, 0)
+            task.wait(0.05)
+        else
+            hrp.CFrame = targetCoin.CFrame * CFrame.new(0, -3.5, 0) * CFrame.Angles(math.rad(90), 0, 0)
+            
+            local startTime = tick()
+            while targetCoin and targetCoin.Parent and (tick() - startTime < 2.5) do
+                local currentLiveChar = LocalPlayer.Character
+                local currentHumanoid = currentLiveChar and currentLiveChar:FindFirstChildOfClass("Humanoid")
+                if not currentLiveChar or not currentHumanoid or currentHumanoid.Health <= 0 then
+                    break
+                end
+
+                pcall(function()
+                    local checkText = LocalPlayer.PlayerGui.MainGUI.Game.CoinBags.Container.Coin.CurrencyFrame.Icon.Coins.Text
+                    local val = tonumber(checkText)
+                    if val and val >= 40 then
+                        isFull = true
+                    end
+                end)
+
+                if isFull then
+                    task.wait(1)
+                    hardReset()
+                    break
+                end
+
+                if firetouchinterest then
+                    for _, v in ipairs(container:GetDescendants()) do
+                        if v.Name == "Coin_Server" and v:IsA("BasePart") then
+                            if (hrp.Position - v.Position).Magnitude <= 7 then
+                                firetouchinterest(hrp, v, 0)
+                                firetouchinterest(hrp, v, 1)
+                            end
+                        end
+                    end
+                end
+                RunService.Heartbeat:Wait()
+            end
+        end
+    end
+end)
