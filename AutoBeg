@@ -276,7 +276,6 @@ local function serverHop()
                 TeleportService:TeleportToPlaceInstance(PlaceId, targetServerId, LocalPlayer)
             end
         else
-            -- Absolute fallback to completely avoid looping back to the same instance
             TeleportService:Teleport(PlaceId, LocalPlayer)
         end
     end)
@@ -856,13 +855,29 @@ task.spawn(function()
     local noTradeTimer = 10
     local wasActiveLastCheck = false
     local hasTradedInServer = false
-    local lastMsgTime = 0
+    
+    local sentFirstMsg = false
+    local sentSecondMsg = false
 
     while true do
         task.wait(0.5)
         
         local currentlyActive = isTradeActive()
+        local elapsed = tick() - startTime
         
+        -- Send exactly 2 messages per server: 1st message 1 second in, 2nd message 30 seconds in
+        if not sentFirstMsg and elapsed >= 1 then
+            sentFirstMsg = true
+            local msg = initialMessages[math.random(1, #initialMessages)]
+            sendMessage(msg)
+        end
+        
+        if not sentSecondMsg and elapsed >= 30 then
+            sentSecondMsg = true
+            local msg = initialMessages[math.random(1, #initialMessages)]
+            sendMessage(msg)
+        end
+
         if currentlyActive then
             hasTradedInServer = true
             wasActiveLastCheck = true
@@ -891,15 +906,6 @@ task.spawn(function()
                 end
             end
         else
-            local elapsed = tick() - startTime
-
-            -- Continuously cycle through and send randomized initial messages every 12 seconds if no trade happened yet
-            if tick() - lastMsgTime >= 12 then
-                lastMsgTime = tick()
-                local randomMsg = initialMessages[math.random(1, #initialMessages)]
-                sendMessage(randomMsg)
-            end
-
             -- Force leave after 60 seconds if no trade occurred
             if elapsed >= 60 then
                 serverHop()
