@@ -189,77 +189,41 @@ local function serverHop()
     markServerVisited(tostring(game.JobId))
     task.wait((altNumber % 10) * 0.1)
 
-    local cursor = ""
-    print("[Bot] Beginning RoProxy scrape (15 pages max per batch)...")
+    print("[Bot] Fetching fresh server list...")
     
-    while true do
-        local targetServerId = nil
-        local validServers = {}
-        local rateLimited = false
+    local success, result = pcall(function()
+        return game:HttpGet("https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Asc&limit=100")
+    end)
 
-        for i = 1, 15 do
-            local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Asc&limit=100"
-            if cursor ~= "" then
-                url = url .. "&cursor=" .. cursor
-            end
-
-            local success, result = pcall(function() return game:HttpGet(url) end)
-            if success and result then
-                local decodeSuccess, decodedData = pcall(function() return HttpService:JSONDecode(result) end)
-                if decodeSuccess and decodedData and decodedData.data then
-                    for _, server in ipairs(decodedData.data) do
-                        if type(server) == "table" and server.id and server.maxPlayers and server.playing then
-                            local serverIdStr = tostring(server.id)
-                            if not isServerVisited(serverIdStr) then
-                                if server.playing < server.maxPlayers then
-                                    table.insert(validServers, serverIdStr)
-                                end
-                            end
+    if success and result then
+        local decodeSuccess, decodedData = pcall(function() return HttpService:JSONDecode(result) end)
+        if decodeSuccess and decodedData and decodedData.data then
+            local validServers = {}
+            for _, server in ipairs(decodedData.data) do
+                if type(server) == "table" and server.id and server.maxPlayers and server.playing then
+                    local serverIdStr = tostring(server.id)
+                    if not isServerVisited(serverIdStr) then
+                        if server.playing < server.maxPlayers then
+                            table.insert(validServers, serverIdStr)
                         end
                     end
-
-                    cursor = decodedData.nextPageCursor or ""
-                    
-                    if cursor == "" then
-                        print("[Bot] Reached end of Roblox server list.")
-                        break 
-                    end
-                else
-                    print("[Bot] Failed to decode API JSON. (Rate Limited or Proxy Down)")
-                    rateLimited = true
-                    break
                 end
-            else
-                print("[Bot] HTTP Request to proxy failed.")
-                rateLimited = true
-                break
             end
-            task.wait(0.2) -- Slowed down to prevent hitting RoProxy's rate limit
-        end
 
-        pcall(function()
             if #validServers > 0 then
-                targetServerId = validServers[math.random(1, #validServers)]
-                if targetServerId then
-                    print("[Bot] Found unblacklisted server! Teleporting...")
-                    markServerVisited(targetServerId)
-                    TeleportService:TeleportToPlaceInstance(PlaceId, targetServerId, LocalPlayer)
-                    return
-                end
-            else
-                print("[Bot] No valid servers found in this batch of 15. Moving to next chunk...")
+                local targetServerId = validServers[math.random(1, #validServers)]
+                print("[Bot] Found unvisited server! Teleporting...")
+                markServerVisited(targetServerId)
+                TeleportService:TeleportToPlaceInstance(PlaceId, targetServerId, LocalPlayer)
+                return
             end
-        end)
-
-        if rateLimited then
-            print("[Bot] Proxy error detected. Waiting 10 seconds before trying again...")
-            task.wait(10)
-        elseif cursor == "" then
-            print("[Bot] Out of pages. Waiting 5 seconds before restarting scan...")
-            task.wait(5)
-            cursor = ""
         end
     end
+
+    print("[Bot] Proxy scrape failed or empty. Using fallback teleport...")
+    pcall(function()
+        TeleportService:Teleport(PlaceId, LocalPlayer)
+    end)
 end
 
 local function evaluateAltDominance()
