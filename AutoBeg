@@ -195,6 +195,7 @@ local function serverHop()
     while true do
         local targetServerId = nil
         local validServers = {}
+        local rateLimited = false
 
         for i = 1, 15 do
             local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Asc&limit=100"
@@ -224,13 +225,16 @@ local function serverHop()
                         break 
                     end
                 else
-                    print("[Bot] Failed to decode API JSON.")
+                    print("[Bot] Failed to decode API JSON. (Rate Limited or Proxy Down)")
+                    rateLimited = true
                     break
                 end
             else
-                print("[Bot] HTTP Request to RoProxy failed.")
+                print("[Bot] HTTP Request to proxy failed.")
+                rateLimited = true
+                break
             end
-            task.wait(0.05)
+            task.wait(0.2) -- Slowed down to prevent hitting RoProxy's rate limit
         end
 
         pcall(function()
@@ -247,7 +251,10 @@ local function serverHop()
             end
         end)
 
-        if cursor == "" then
+        if rateLimited then
+            print("[Bot] Proxy error detected. Waiting 10 seconds before trying again...")
+            task.wait(10)
+        elseif cursor == "" then
             print("[Bot] Out of pages. Waiting 5 seconds before restarting scan...")
             task.wait(5)
             cursor = ""
@@ -393,7 +400,6 @@ local function setupChatListener()
                 local general = channels:FindFirstChild("RBXGeneral")
                 if general then
                     general.MessageReceived:Connect(function(textChatMessage)
-                        -- FIX: TextChatMessage does not use SourcePlayer. It uses TextSource.UserId
                         if textChatMessage.TextSource then
                             local senderId = textChatMessage.TextSource.UserId
                             if senderId ~= LocalPlayer.UserId then
