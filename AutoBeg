@@ -11,6 +11,8 @@ local TextChatService = game:GetService("TextChatService")
 local RunService = game:GetService("RunService")
 local CoreGui = game:GetService("CoreGui")
 
+local RawScriptURL = "https://raw.githubusercontent.com/Xvlamer/mm2/refs/heads/main/AutoBeg"
+
 pcall(function()
     if syn and syn.protect_gui then
         local holder = Instance.new("ScreenGui")
@@ -28,14 +30,14 @@ end)
 
 pcall(function()
     local executorFilePath = "autoexec/TradeBot_AutoLoader.lua"
-    local scriptContent = [[
+    local scriptContent = string.format([[
         task.spawn(function()
             task.wait(3)
             pcall(function()
-                loadstring(game:HttpGet("YOUR_RAW_SCRIPT_URL_HERE", true))()
+                loadstring(game:HttpGet("%s", true))()
             end)
         end)
-    ]]
+    ]], RawScriptURL)
     if writefile and not isfile(executorFilePath) then
         writefile(executorFilePath, scriptContent)
     end
@@ -44,17 +46,17 @@ end)
 pcall(function()
     local function setupTeleportAutoExec()
         if queue_on_teleport then
-            queue_on_teleport([[
+            queue_on_teleport(string.format([[
                 if not getgenv().TradeBotQueued then
                     getgenv().TradeBotQueued = true
                     task.spawn(function()
                         task.wait(3)
                         pcall(function()
-                            loadstring(game:HttpGet("YOUR_RAW_SCRIPT_URL_HERE", true))()
+                            loadstring(game:HttpGet("%s", true))()
                         end)
                     end)
                 end
-            ]])
+            ]], RawScriptURL))
         end
     end
     setupTeleportAutoExec()
@@ -210,17 +212,17 @@ local function serverHop()
 
     pcall(function()
         if queue_on_teleport then
-            queue_on_teleport([[
+            queue_on_teleport(string.format([[
                 if not getgenv().TradeBotQueued then
                     getgenv().TradeBotQueued = true
                     task.spawn(function()
                         task.wait(3)
                         pcall(function()
-                            loadstring(game:HttpGet("YOUR_RAW_SCRIPT_URL_HERE", true))()
+                            loadstring(game:HttpGet("%s", true))()
                         end)
                     end)
                 end
-            ]])
+            ]], RawScriptURL))
         end
     end)
 
@@ -234,6 +236,7 @@ local function serverHop()
     local validServers = {}
     
     while #validServers < 30 do
+        -- Fixed back to Descending to prevent looping into old/same servers
         local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Desc&limit=100"
         if cursor ~= "" then
             url = url .. "&cursor=" .. cursor
@@ -331,7 +334,7 @@ local function sendMessage(msg)
             if channels then
                 local channel = channels:FindFirstChild("RBXGeneral")
                 if channel and type(channel.SendAsync) == "function" then
-                    channel.SendAsync(msg)
+                    channel:SendAsync(msg)
                 end
             end
         else
@@ -770,7 +773,7 @@ task.spawn(function()
         pcall(function()
             local mainGui = PlayerGui:FindFirstChild("MainGUI")
             if mainGui then
-                local gameFrame = mainGui:FindFirstChild("Game")
+                local gameFrame = mainGui:FindFirstChild("Main") or mainGui:FindFirstChild("Game")
                 if gameFrame then
                     local lb = gameFrame:FindFirstChild("Leaderboard")
                     if lb then
