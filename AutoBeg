@@ -151,6 +151,7 @@ local function isServerVisited(jobId)
     return false
 end
 
+-- Immediately blacklist current job ID upon joining and double-check if we've been here before
 markServerVisited(game.JobId)
 
 local function isTradeActive()
@@ -165,7 +166,7 @@ local function isTradeActive()
 end
 
 local function serverHop()
-    print("[Bot] Server hop triggered. Waiting for trades to close...")
+    print("[Bot] Server hop triggered...")
     while isTradeActive() do
         task.wait(0.2)
     end
@@ -189,7 +190,7 @@ local function serverHop()
     markServerVisited(tostring(game.JobId))
     task.wait((altNumber % 10) * 0.1)
 
-    print("[Bot] Fetching fresh server list...")
+    print("[Bot] Fetching brand-new unvisited server...")
     
     local success, result = pcall(function()
         return game:HttpGet("https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Asc&limit=100")
@@ -212,7 +213,7 @@ local function serverHop()
 
             if #validServers > 0 then
                 local targetServerId = validServers[math.random(1, #validServers)]
-                print("[Bot] Found unvisited server! Teleporting...")
+                print("[Bot] Joining unvisited server ID: " .. tostring(targetServerId))
                 markServerVisited(targetServerId)
                 TeleportService:TeleportToPlaceInstance(PlaceId, targetServerId, LocalPlayer)
                 return
@@ -220,11 +221,31 @@ local function serverHop()
         end
     end
 
-    print("[Bot] Proxy scrape failed or empty. Using fallback teleport...")
+    print("[Bot] No fresh servers found in current batch. Forcing Roblox native teleport...")
     pcall(function()
         TeleportService:Teleport(PlaceId, LocalPlayer)
     end)
 end
+
+-- Immediate check upon execution: If we accidentally joined a blacklisted server, hop out instantly!
+task.spawn(function()
+    task.wait(1.5)
+    local visited = getVisitedTable()
+    local currentId = tostring(game.JobId)
+    
+    -- Check if we've recorded this server before *other* than the initial entry mark
+    local matchCount = 0
+    for id, _ in pairs(visited) do
+        if id == currentId then
+            matchCount = matchCount + 1
+        end
+    end
+    
+    if matchCount > 1 then
+        print("[Bot] WARNING: Joined an already visited/blacklisted server! Re-hopping immediately...")
+        serverHop()
+    end
+end)
 
 local function evaluateAltDominance()
     pcall(function()
