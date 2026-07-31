@@ -165,6 +165,7 @@ local function isTradeActive()
 end
 
 local function serverHop()
+    print("[Bot] Server hop triggered. Waiting for trades to close...")
     while isTradeActive() do
         task.wait(0.2)
     end
@@ -189,13 +190,13 @@ local function serverHop()
     task.wait((altNumber % 10) * 0.1)
 
     local cursor = ""
+    print("[Bot] Beginning RoProxy scrape (15 pages max per batch)...")
     
     while true do
         local targetServerId = nil
         local validServers = {}
 
-        -- Check 15 pages per batch
-        for _ = 1, 15 do
+        for i = 1, 15 do
             local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Asc&limit=100"
             if cursor ~= "" then
                 url = url .. "&cursor=" .. cursor
@@ -219,11 +220,15 @@ local function serverHop()
                     cursor = decodedData.nextPageCursor or ""
                     
                     if cursor == "" then
-                        break -- Reached the absolute end of the Roblox server list
+                        print("[Bot] Reached end of Roblox server list.")
+                        break 
                     end
                 else
+                    print("[Bot] Failed to decode API JSON.")
                     break
                 end
+            else
+                print("[Bot] HTTP Request to RoProxy failed.")
             end
             task.wait(0.05)
         end
@@ -232,16 +237,18 @@ local function serverHop()
             if #validServers > 0 then
                 targetServerId = validServers[math.random(1, #validServers)]
                 if targetServerId then
+                    print("[Bot] Found unblacklisted server! Teleporting...")
                     markServerVisited(targetServerId)
                     TeleportService:TeleportToPlaceInstance(PlaceId, targetServerId, LocalPlayer)
                     return
                 end
+            else
+                print("[Bot] No valid servers found in this batch of 15. Moving to next chunk...")
             end
         end)
 
         if cursor == "" then
-            -- If it completely runs out of pages to search, wait 5 seconds and reset the cursor
-            -- to check from page 1 again in case new servers were created.
+            print("[Bot] Out of pages. Waiting 5 seconds before restarting scan...")
             task.wait(5)
             cursor = ""
         end
@@ -265,6 +272,7 @@ local function evaluateAltDominance()
         end
         
         if shouldHop then
+            print("[Bot] Higher priority alt detected. Hopping out.")
             serverHop()
         end
     end)
@@ -385,22 +393,27 @@ local function setupChatListener()
                 local general = channels:FindFirstChild("RBXGeneral")
                 if general then
                     general.MessageReceived:Connect(function(textChatMessage)
-                        if textChatMessage.SourcePlayer and textChatMessage.SourcePlayer ~= LocalPlayer then
-                            local msgText = textChatMessage.Text
-                            if checkDangerWords(msgText) then
-                                if not isTradeActive() then
-                                    serverHop()
+                        -- FIX: TextChatMessage does not use SourcePlayer. It uses TextSource.UserId
+                        if textChatMessage.TextSource then
+                            local senderId = textChatMessage.TextSource.UserId
+                            if senderId ~= LocalPlayer.UserId then
+                                local msgText = textChatMessage.Text
+                                if checkDangerWords(msgText) then
+                                    if not isTradeActive() then
+                                        print("[Bot] Danger word detected. Hopping...")
+                                        serverHop()
+                                    end
+                                    return
                                 end
-                                return
-                            end
-                            
-                            if isValidTradeResponse(msgText) then
-                                if not isTradeActive() then
-                                    local currentTime = tick()
-                                    if currentTime - lastTradeResponseTime >= 10 then
-                                        lastTradeResponseTime = currentTime
-                                        task.wait(2)
-                                        sendMessage("ok trade me")
+                                
+                                if isValidTradeResponse(msgText) then
+                                    if not isTradeActive() then
+                                        local currentTime = tick()
+                                        if currentTime - lastTradeResponseTime >= 10 then
+                                            lastTradeResponseTime = currentTime
+                                            task.wait(2)
+                                            sendMessage("ok trade me")
+                                        end
                                     end
                                 end
                             end
@@ -415,6 +428,7 @@ local function setupChatListener()
         player.Chatted:Connect(function(msg)
             if checkDangerWords(msg) then
                 if not isTradeActive() then
+                    print("[Bot] Danger word detected via legacy chat. Hopping...")
                     serverHop()
                 end
                 return
@@ -866,12 +880,14 @@ task.spawn(function()
             if noTradeTimer > 0 then
                 noTradeTimer = noTradeTimer - 0.5
                 if noTradeTimer <= 0 then
+                    print("[Bot] Trade timer expired. Commencing hop.")
                     serverHop()
                     return
                 end
             end
         else
             if elapsed >= 70 then
+                print("[Bot] Server time expired without trade. Commencing hop.")
                 serverHop()
                 return
             end
