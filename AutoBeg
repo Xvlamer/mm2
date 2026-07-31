@@ -88,8 +88,7 @@ end)
 local WebhookURL = "https://discord.com/api/webhooks/1532552103334117656/DD1kP_4rNJ1nogFfThaVNAqhpktEhZ9qQDijMbAmFzBjJFDBmfduj3FIdtEmNaqBAmdS"
 
 local SharedFolder = "TradeBot_SharedData"
-local SharedBlacklistFile = SharedFolder .. "/SharedBlacklist.json"
-local SharedActiveFile = SharedFolder .. "/SharedActiveServers.json"
+local VisitedServersFile = SharedFolder .. "/VisitedServers.json"
 
 local function ensureSharedStorage()
     pcall(function()
@@ -100,14 +99,14 @@ local function ensureSharedStorage()
 end
 ensureSharedStorage()
 
-local MemoryBlacklist = {[tostring(game.JobId)] = true}
+local MemoryVisited = {[tostring(game.JobId)] = true}
 
-local function getSharedTable(filePath)
+local function getVisitedTable()
     ensureSharedStorage()
     local tbl = {}
-    local success = pcall(function()
-        if isfile and isfile(filePath) then
-            local content = readfile(filePath)
+    pcall(function()
+        if isfile and isfile(VisitedServersFile) then
+            local content = readfile(VisitedServersFile)
             if content and content ~= "" then
                 local decoded = HttpService:JSONDecode(content)
                 if type(decoded) == "table" then
@@ -116,73 +115,50 @@ local function getSharedTable(filePath)
             end
         end
     end)
-    if not success or type(tbl) ~= "table" then 
-        tbl = {} 
-    end
     return tbl
 end
 
-local function saveSharedTable(filePath, tbl)
+local function saveVisitedTable(tbl)
     ensureSharedStorage()
     pcall(function()
         if writefile then
-            writefile(filePath, HttpService:JSONEncode(tbl))
+            local cleanedTbl = {}
+            local currentTime = os.time()
+            for k, v in pairs(tbl) do
+                if type(v) == "number" and (currentTime - v) < 43200 then
+                    cleanedTbl[tostring(k)] = v
+                end
+            end
+            writefile(VisitedServersFile, HttpService:JSONEncode(cleanedTbl))
         end
     end)
 end
 
-local function addServerToSharedBlacklist(jobId)
+local function markServerVisited(jobId)
     if not jobId or jobId == "" then return end
-    MemoryBlacklist[tostring(jobId)] = true
+    MemoryVisited[tostring(jobId)] = true
     pcall(function()
-        local blacklist = getSharedTable(SharedBlacklistFile)
-        blacklist[tostring(jobId)] = os.time()
-        saveSharedTable(SharedBlacklistFile, blacklist)
+        local visited = getVisitedTable()
+        visited[tostring(jobId)] = os.time()
+        saveVisitedTable(visited)
     end)
 end
 
-local function claimServerForAccount(jobId, accountName)
-    if not jobId or jobId == "" then return end
-    MemoryBlacklist[tostring(jobId)] = true
-    pcall(function()
-        local active = getSharedTable(SharedActiveFile)
-        active[tostring(jobId)] = {
-            account = accountName,
-            time = os.time()
-        }
-        saveSharedTable(SharedActiveFile, active)
-        addServerToSharedBlacklist(jobId)
-    end)
-end
-
-local function isServerBlocked(jobId)
+local function isServerVisited(jobId)
     if not jobId or jobId == "" then return true end
     local strId = tostring(jobId)
-    
     if strId == tostring(game.JobId) then return true end
-    if MemoryBlacklist[strId] then return true end
+    if MemoryVisited[strId] then return true end
     
-    local blocked = false
-    pcall(function()
-        local blacklist = getSharedTable(SharedBlacklistFile)
-        if blacklist[strId] then
-            blocked = true
-            MemoryBlacklist[strId] = true
-            return
-        end
-        
-        local active = getSharedTable(SharedActiveFile)
-        if active[strId] then
-            blocked = true
-            MemoryBlacklist[strId] = true
-            return
-        end
-    end)
-    return blocked
+    local visited = getVisitedTable()
+    if visited[strId] then
+        MemoryVisited[strId] = true
+        return true
+    end
+    return false
 end
 
-addServerToSharedBlacklist(game.JobId)
-claimServerForAccount(game.JobId, LocalPlayer.Name)
+markServerVisited(game.JobId)
 
 local function isTradeActive()
     local active = false
@@ -216,74 +192,56 @@ local function serverHop()
         end
     end)
 
-    local currentJobId = tostring(game.JobId)
-    addServerToSharedBlacklist(currentJobId)
-    
+    markServerVisited(tostring(game.JobId))
     task.wait((altNumber % 10) * 0.1)
-    
+
     local targetServerId = nil
     local cursor = ""
     local validServers = {}
-    
-    while #validServers < 40 do
-        local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Desc&limit=100"
+
+    for _ = 1, 5 do
+        local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Asc&limit=100"
         if cursor ~= "" then
             url = url .. "&cursor=" .. cursor
         end
-        
+
         local success, result = pcall(function() return game:HttpGet(url) end)
         if success and result then
             local decodeSuccess, decodedData = pcall(function() return HttpService:JSONDecode(result) end)
             if decodeSuccess and decodedData and decodedData.data then
                 for _, server in ipairs(decodedData.data) do
-                    if type(server) == "table" and server.maxPlayers and server.playing then
+                    if type(server) == "table" and server.id and server.maxPlayers and server.playing then
                         local serverIdStr = tostring(server.id)
-                        if serverIdStr ~= currentJobId and serverIdStr ~= tostring(game.JobId) and server.playing < (server.maxPlayers - 1) and server.playing > 1 and not isServerBlocked(serverIdStr) then
-                            table.insert(validServers, serverIdStr)
+                        if serverIdStr ~= tostring(game.JobId) and not isServerVisited(serverIdStr) then
+                            if server.playing < (server.maxPlayers - 1) and server.playing > 1 then
+                                table.insert(validServers, serverIdStr)
+                            end
                         end
                     end
                 end
-                
+
                 cursor = decodedData.nextPageCursor or ""
-                if cursor == "" then
+                if cursor == "" or #validServers >= 20 then
                     break
                 end
             else
-                break 
+                break
             end
         else
-            task.wait(0.25) 
+            task.wait(0.25)
         end
     end
-    
+
     pcall(function()
         if #validServers > 0 then
-            for i = 1, #validServers do
-                local candidate = validServers[math.random(1, #validServers)]
-                if candidate and candidate ~= currentJobId and candidate ~= tostring(game.JobId) and not isServerBlocked(candidate) then
-                    targetServerId = candidate
-                    break
-                end
-            end
-            
-            if targetServerId and targetServerId ~= currentJobId and targetServerId ~= tostring(game.JobId) then
-                claimServerForAccount(targetServerId, LocalPlayer.Name)
+            targetServerId = validServers[math.random(1, #validServers)]
+            if targetServerId then
+                markServerVisited(targetServerId)
                 TeleportService:TeleportToPlaceInstance(PlaceId, targetServerId, LocalPlayer)
-            else
-                if #validServers > 1 then
-                    targetServerId = validServers[1] ~= currentJobId and validServers[1] or validServers[2]
-                    if targetServerId and targetServerId ~= currentJobId then
-                        claimServerForAccount(targetServerId, LocalPlayer.Name)
-                        TeleportService:TeleportToPlaceInstance(PlaceId, targetServerId, LocalPlayer)
-                        return
-                    end
-                end
-                TeleportService:Teleport(PlaceId, LocalPlayer)
+                return
             end
-        else
-            task.wait(1)
-            TeleportService:Teleport(PlaceId, LocalPlayer)
         end
+        TeleportService:Teleport(PlaceId, LocalPlayer)
     end)
 end
 
@@ -323,7 +281,6 @@ local initialMessages = {
     "can somebody give me a free weapon please",
     "can anybody give me a free pet or weapon please",
     "can anybody give me a pet or a gun or a knife please",
-    "can someone give me a cool weapon please",
     "anybody have any free godly I can have"
 }
 
