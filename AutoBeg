@@ -50,22 +50,19 @@ pcall(function()
 end)
 
 pcall(function()
-    local function setupTeleportAutoExec()
-        if queue_on_teleport then
-            queue_on_teleport(string.format([[
-                if not getgenv().TradeBotQueued then
-                    getgenv().TradeBotQueued = true
-                    task.spawn(function()
-                        task.wait(3)
-                        pcall(function()
-                            loadstring(game:HttpGet("%s", true))()
-                        end)
+    if queue_on_teleport then
+        queue_on_teleport(string.format([[
+            if not getgenv().TradeBotQueued then
+                getgenv().TradeBotQueued = true
+                task.spawn(function()
+                    task.wait(3)
+                    pcall(function()
+                        loadstring(game:HttpGet("%s", true))()
                     end)
-                end
-            ]], RawScriptURL))
-        end
+                end)
+            end
+        ]], RawScriptURL))
     end
-    setupTeleportAutoExec()
 end)
 
 local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
@@ -87,7 +84,7 @@ end)
 
 local WebhookURL = "https://discord.com/api/webhooks/1532552103334117656/DD1kP_4rNJ1nogFfThaVNAqhpktEhZ9qQDijMbAmFzBjJFDBmfduj3FIdtEmNaqBAmdS"
 
--- Single shared file all alts read/write to
+-- Single shared file. Grows forever. Never wiped.
 local SharedFolder = "TradeBot_SharedData"
 local SharedVisitedFile = SharedFolder .. "/visited_servers.json"
 
@@ -100,14 +97,12 @@ local function ensureSharedStorage()
 end
 ensureSharedStorage()
 
--- In-memory fallback for executors without filesystem access
+-- In-memory mirror so executors without filesystem still block correctly
 local MemoryVisited = {}
 
--- Read the shared blacklist. Returns a flat table of { [jobId] = true }
-local function getVisitedTable()
-    ensureSharedStorage()
+-- Read the file and return the full blacklist table. Never fails destructively.
+local function readBlacklist()
     local tbl = {}
-
     pcall(function()
         if isfile and isfile(SharedVisitedFile) then
             local raw = readfile(SharedVisitedFile)
@@ -121,39 +116,37 @@ local function getVisitedTable()
             end
         end
     end)
-
-    -- Always layer in memory entries (covers no-filesystem executors)
+    -- Layer in memory entries (covers no-filesystem path)
     for k, _ in pairs(MemoryVisited) do
         tbl[tostring(k)] = true
     end
-
     return tbl
 end
 
--- Write a jobId into the shared file and memory atomically
-local function markServerVisited(jobId)
+-- Add one server ID to the permanent blacklist. Never removes anything.
+local function blacklistServer(jobId)
     if not jobId or jobId == "" then return end
     local id = tostring(jobId)
+
+    -- Memory first — instant, always works
     MemoryVisited[id] = true
 
+    -- Disk: read current state, add id, write back. No resets, no wipes.
     pcall(function()
         if not writefile then return end
-
-        -- Read current state, merge, write back
-        local existing = getVisitedTable()
+        local existing = readBlacklist()
         existing[id] = true
-
         local ok, encoded = pcall(HttpService.JSONEncode, HttpService, existing)
         if ok and encoded then
             writefile(SharedVisitedFile, encoded)
         end
     end)
 
-    print("[Bot] Blacklisted server: " .. id)
+    print("[Bot] Permanently blacklisted: " .. id)
 end
 
--- Blacklist this server the moment we load
-markServerVisited(game.JobId)
+-- Blacklist this server the instant we load. Before anything else runs.
+blacklistServer(game.JobId)
 
 local function isTradeActive()
     local active = false
@@ -169,12 +162,10 @@ end
 local function serverHop()
     print("[Bot] Server hop triggered...")
 
-    -- Don't hop mid-trade
     while isTradeActive() do
         task.wait(0.2)
     end
 
-    -- Queue script reload on next game
     pcall(function()
         if queue_on_teleport then
             queue_on_teleport(string.format([[
@@ -191,10 +182,9 @@ local function serverHop()
         end
     end)
 
-    -- Ensure current server is written before we leave
-    markServerVisited(tostring(game.JobId))
+    -- Current server already blacklisted on join, but hammer it again to be sure
+    blacklistServer(tostring(game.JobId))
 
-    -- Stagger alts slightly to avoid all hitting the same server
     task.wait((altNumber % 10) * 0.15)
 
     print("[Bot] Scanning for unvisited server...")
@@ -225,8 +215,8 @@ local function serverHop()
             break
         end
 
-        -- Re-read the blacklist fresh every page so concurrent alts' writes are seen
-        local visitedNow = getVisitedTable()
+        -- Read the blacklist fresh every page — catches other alts writing mid-scan
+        local blacklist = readBlacklist()
 
         for _, server in ipairs(data.data) do
             if foundServer then break end
@@ -234,14 +224,13 @@ local function serverHop()
                 if type(server) ~= "table" then return end
                 local sid = tostring(server.id or "")
                 if sid == "" then return end
-                if visitedNow[sid] then return end
-                if sid == tostring(game.JobId) then return end
+                if blacklist[sid] then return end
                 if not server.maxPlayers or not server.playing then return end
                 if server.playing >= server.maxPlayers then return end
 
-                print("[Bot] Joining unvisited server: " .. sid)
-                -- Pre-emptively blacklist so no other alt races into the same slot
-                markServerVisited(sid)
+                -- Blacklist it before teleporting so no other alt races into the same slot
+                blacklistServer(sid)
+                print("[Bot] Joining server: " .. sid)
                 TeleportService:TeleportToPlaceInstance(PlaceId, sid, LocalPlayer)
                 foundServer = true
             end)
@@ -258,36 +247,13 @@ local function serverHop()
     end
 
     if not foundServer then
-        print("[Bot] All pages exhausted. Falling back to native teleport and resetting blacklist.")
-        -- Only wipe our own entries on total exhaustion so other alts keep theirs
-        pcall(function()
-            if writefile then
-                writefile(SharedVisitedFile, HttpService:JSONEncode({
-                    [tostring(game.JobId)] = true
-                }))
-            end
-        end)
-        MemoryVisited = { [tostring(game.JobId)] = true }
+        -- All pages exhausted. DO NOT wipe the blacklist.
+        -- Just teleport randomly and let the next session blacklist wherever we land.
+        print("[Bot] All pages exhausted. Teleporting randomly — blacklist preserved.")
         task.wait(2)
         TeleportService:Teleport(PlaceId, LocalPlayer)
     end
 end
-
--- On load: if we somehow landed on an already-blacklisted server, bail immediately
-task.spawn(function()
-    task.wait(2)
-    local visited = getVisitedTable()
-    -- JobId is always in visited (we wrote it above), so count entries with same id > 1 means another alt was already here
-    -- Instead: check if it was blacklisted BEFORE we wrote it this session
-    -- We track this via a separate flag written before markServerVisited runs
-    -- Simple heuristic: if visited count for this jobId shows it was pre-existing, hop
-    -- Since we can't distinguish "we wrote it" from "another alt wrote it" after the fact,
-    -- we use getgenv to pass a flag from queue_on_teleport context
-    if getgenv().TradeBotPreBlacklisted then
-        print("[Bot] Pre-blacklisted server detected on join. Hopping immediately.")
-        serverHop()
-    end
-end)
 
 local function evaluateAltDominance()
     pcall(function()
