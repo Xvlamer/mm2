@@ -122,14 +122,7 @@ local function saveVisitedTable(tbl)
     ensureSharedStorage()
     pcall(function()
         if writefile then
-            local cleanedTbl = {}
-            local currentTime = os.time()
-            for k, v in pairs(tbl) do
-                if type(v) == "number" and (currentTime - v) < 43200 then
-                    cleanedTbl[tostring(k)] = v
-                end
-            end
-            writefile(VisitedServersFile, HttpService:JSONEncode(cleanedTbl))
+            writefile(VisitedServersFile, HttpService:JSONEncode(tbl))
         end
     end)
 end
@@ -139,7 +132,7 @@ local function markServerVisited(jobId)
     MemoryVisited[tostring(jobId)] = true
     pcall(function()
         local visited = getVisitedTable()
-        visited[tostring(jobId)] = os.time()
+        visited[tostring(jobId)] = true
         saveVisitedTable(visited)
     end)
 end
@@ -195,70 +188,64 @@ local function serverHop()
     markServerVisited(tostring(game.JobId))
     task.wait((altNumber % 10) * 0.1)
 
-    local targetServerId = nil
     local cursor = ""
-    local validServers = {}
+    
+    while true do
+        local targetServerId = nil
+        local validServers = {}
 
-    for _ = 1, 15 do
-        local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Asc&limit=100"
-        if cursor ~= "" then
-            url = url .. "&cursor=" .. cursor
-        end
+        -- Check 15 pages per batch
+        for _ = 1, 15 do
+            local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Asc&limit=100"
+            if cursor ~= "" then
+                url = url .. "&cursor=" .. cursor
+            end
 
-        local success, result = pcall(function() return game:HttpGet(url) end)
-        if success and result then
-            local decodeSuccess, decodedData = pcall(function() return HttpService:JSONDecode(result) end)
-            if decodeSuccess and decodedData and decodedData.data then
-                for _, server in ipairs(decodedData.data) do
-                    if type(server) == "table" and server.id and server.maxPlayers and server.playing then
-                        local serverIdStr = tostring(server.id)
-                        if serverIdStr ~= tostring(game.JobId) and not isServerVisited(serverIdStr) then
-                            if server.playing < server.maxPlayers then
-                                table.insert(validServers, serverIdStr)
+            local success, result = pcall(function() return game:HttpGet(url) end)
+            if success and result then
+                local decodeSuccess, decodedData = pcall(function() return HttpService:JSONDecode(result) end)
+                if decodeSuccess and decodedData and decodedData.data then
+                    for _, server in ipairs(decodedData.data) do
+                        if type(server) == "table" and server.id and server.maxPlayers and server.playing then
+                            local serverIdStr = tostring(server.id)
+                            if not isServerVisited(serverIdStr) then
+                                if server.playing < server.maxPlayers then
+                                    table.insert(validServers, serverIdStr)
+                                end
                             end
                         end
                     end
-                end
 
-                cursor = decodedData.nextPageCursor or ""
-                if cursor == "" or #validServers >= 30 then
+                    cursor = decodedData.nextPageCursor or ""
+                    
+                    if cursor == "" then
+                        break -- Reached the absolute end of the Roblox server list
+                    end
+                else
                     break
                 end
-            else
-                break
             end
-        else
-            task.wait(0.25)
+            task.wait(0.05)
         end
-    end
 
-    pcall(function()
-        if #validServers > 0 then
-            targetServerId = validServers[math.random(1, #validServers)]
-            if targetServerId then
-                markServerVisited(targetServerId)
-                TeleportService:TeleportToPlaceInstance(PlaceId, targetServerId, LocalPlayer)
-                return
-            end
-        end
-        
-        saveVisitedTable({})
-        local fallbackUrl = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Asc&limit=10"
-        local success, result = pcall(function() return game:HttpGet(fallbackUrl) end)
-        if success and result then
-            local decodeSuccess, decodedData = pcall(function() return HttpService:JSONDecode(result) end)
-            if decodeSuccess and decodedData and decodedData.data then
-                for _, server in ipairs(decodedData.data) do
-                    if type(server) == "table" and server.id and server.id ~= tostring(game.JobId) then
-                        TeleportService:TeleportToPlaceInstance(PlaceId, tostring(server.id), LocalPlayer)
-                        return
-                    end
+        pcall(function()
+            if #validServers > 0 then
+                targetServerId = validServers[math.random(1, #validServers)]
+                if targetServerId then
+                    markServerVisited(targetServerId)
+                    TeleportService:TeleportToPlaceInstance(PlaceId, targetServerId, LocalPlayer)
+                    return
                 end
             end
-        end
+        end)
 
-        TeleportService:Teleport(PlaceId, LocalPlayer)
-    end)
+        if cursor == "" then
+            -- If it completely runs out of pages to search, wait 5 seconds and reset the cursor
+            -- to check from page 1 again in case new servers were created.
+            task.wait(5)
+            cursor = ""
+        end
+    end
 end
 
 local function evaluateAltDominance()
