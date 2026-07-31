@@ -8,7 +8,6 @@ local TeleportService = game:GetService("TeleportService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TextChatService = game:GetService("TextChatService")
-local RunService = game:GetService("RunService")
 local CoreGui = game:GetService("CoreGui")
 
 local RawScriptURL = "https://raw.githubusercontent.com/Xvlamer/mm2/refs/heads/main/AutoBeg"
@@ -38,8 +37,15 @@ pcall(function()
             end)
         end)
     ]], RawScriptURL)
-    if writefile and not isfile(executorFilePath) then
-        writefile(executorFilePath, scriptContent)
+    if writefile then
+        if not isfile or not isfile(executorFilePath) then
+            pcall(function()
+                if not isfolder("autoexec") then
+                    makefolder("autoexec")
+                end
+            end)
+            writefile(executorFilePath, scriptContent)
+        end
     end
 end)
 
@@ -82,16 +88,22 @@ end)
 local WebhookURL = "https://discord.com/api/webhooks/1532552103334117656/DD1kP_4rNJ1nogFfThaVNAqhpktEhZ9qQDijMbAmFzBjJFDBmfduj3FIdtEmNaqBAmdS"
 
 local SharedFolder = "TradeBot_SharedData"
-if makefolder and not isfolder(SharedFolder) then
-    pcall(makefolder, SharedFolder)
-end
-
 local SharedBlacklistFile = SharedFolder .. "/SharedBlacklist.json"
 local SharedActiveFile = SharedFolder .. "/SharedActiveServers.json"
+
+local function ensureSharedStorage()
+    pcall(function()
+        if makefolder and not isfolder(SharedFolder) then
+            makefolder(SharedFolder)
+        end
+    end)
+end
+ensureSharedStorage()
 
 local MemoryBlacklist = {[tostring(game.JobId)] = true}
 
 local function getSharedTable(filePath)
+    ensureSharedStorage()
     local tbl = {}
     local success = pcall(function()
         if isfile and isfile(filePath) then
@@ -111,6 +123,7 @@ local function getSharedTable(filePath)
 end
 
 local function saveSharedTable(filePath, tbl)
+    ensureSharedStorage()
     pcall(function()
         if writefile then
             local cleanedTbl = {}
@@ -235,7 +248,8 @@ local function serverHop()
     local cursor = ""
     local validServers = {}
     
-    while #validServers < 35 do
+    -- Keep pulling servers until we have a substantial pool of completely unique external instances
+    while #validServers < 40 do
         local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Desc&limit=100"
         if cursor ~= "" then
             url = url .. "&cursor=" .. cursor
@@ -248,7 +262,7 @@ local function serverHop()
                 for _, server in ipairs(decodedData.data) do
                     if type(server) == "table" and server.maxPlayers and server.playing then
                         local serverIdStr = tostring(server.id)
-                        if serverIdStr ~= currentJobId and serverIdStr ~= tostring(game.JobId) and server.playing < (server.maxPlayers - 1) and server.playing > 2 and not isServerBlocked(serverIdStr) then
+                        if serverIdStr ~= currentJobId and serverIdStr ~= tostring(game.JobId) and server.playing < (server.maxPlayers - 1) and server.playing > 1 and not isServerBlocked(serverIdStr) then
                             table.insert(validServers, serverIdStr)
                         end
                     end
@@ -268,14 +282,33 @@ local function serverHop()
     
     pcall(function()
         if #validServers > 0 then
-            targetServerId = validServers[math.random(1, #validServers)]
-            if targetServerId == currentJobId or targetServerId == tostring(game.JobId) then
-                TeleportService:Teleport(PlaceId, LocalPlayer)
-            else
+            -- Double check filtering randomly selected target to avoid ever passing current JobId
+            for i = 1, #validServers do
+                local candidate = validServers[math.random(1, #validServers)]
+                if candidate and candidate ~= currentJobId and candidate ~= tostring(game.JobId) and not isServerBlocked(candidate) then
+                    targetServerId = candidate
+                    break
+                end
+            end
+            
+            if targetServerId and targetServerId ~= currentJobId and targetServerId ~= tostring(game.JobId) then
                 claimServerForAccount(targetServerId, LocalPlayer.Name)
                 TeleportService:TeleportToPlaceInstance(PlaceId, targetServerId, LocalPlayer)
+            else
+                -- Fallback to an explicit alternative index or try again with another server list fetch if needed
+                if #validServers > 1 then
+                    targetServerId = validServers[1] ~= currentJobId and validServers[1] or validServers[2]
+                    if targetServerId and targetServerId ~= currentJobId then
+                        claimServerForAccount(targetServerId, LocalPlayer.Name)
+                        TeleportService:TeleportToPlaceInstance(PlaceId, targetServerId, LocalPlayer)
+                        return
+                    end
+                end
+                TeleportService:Teleport(PlaceId, LocalPlayer)
             end
         else
+            -- If zero valid servers found via proxy list, force standard teleport with a randomized delay to land in a different allocation pool
+            task.wait(1)
             TeleportService:Teleport(PlaceId, LocalPlayer)
         end
     end)
@@ -865,7 +898,6 @@ task.spawn(function()
         local currentlyActive = isTradeActive()
         local elapsed = tick() - startTime
         
-        -- Send exactly 2 messages per server: 1st message 1 second in, 2nd message 30 seconds in
         if not sentFirstMsg and elapsed >= 1 then
             sentFirstMsg = true
             local msg = initialMessages[math.random(1, #initialMessages)]
@@ -906,7 +938,6 @@ task.spawn(function()
                 end
             end
         else
-            -- Force leave after 60 seconds if no trade occurred
             if elapsed >= 60 then
                 serverHop()
                 return
