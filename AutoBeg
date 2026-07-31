@@ -38,8 +38,6 @@ local SharedBlacklistFile = SharedFolder .. "/SharedBlacklist.json"
 local SharedActiveFile = SharedFolder .. "/SharedActiveServers.json"
 local MemoryBlacklist = {[tostring(game.JobId)] = true}
 
-getgenv().ItemsGainedDuringTrade = false
-
 local function getSharedTable(filePath)
     local tbl = {}
     local success = pcall(function()
@@ -347,6 +345,8 @@ local function isValidTradeResponse(msg)
     return false
 end
 
+local lastTradeResponseTime = 0
+
 local function setupChatListener()
     pcall(function()
         if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
@@ -366,8 +366,12 @@ local function setupChatListener()
                             
                             if isValidTradeResponse(msgText) then
                                 if not isTradeActive() then
-                                    task.wait(2)
-                                    sendMessage("ok trade me")
+                                    local currentTime = tick()
+                                    if currentTime - lastTradeResponseTime >= 10 then
+                                        lastTradeResponseTime = currentTime
+                                        task.wait(2)
+                                        sendMessage("ok trade me")
+                                    end
                                 end
                             end
                         end
@@ -388,8 +392,12 @@ local function setupChatListener()
             
             if isValidTradeResponse(msg) then
                 if not isTradeActive() then
-                    task.wait(2)
-                    sendMessage("ok trade me")
+                    local currentTime = tick()
+                    if currentTime - lastTradeResponseTime >= 10 then
+                        lastTradeResponseTime = currentTime
+                        task.wait(2)
+                        sendMessage("ok trade me")
+                    end
                 end
             end
         end)
@@ -461,16 +469,23 @@ local function scanInventory()
                             
                             local rarity = getRarity(itemNameFrame.BackgroundColor3)
                             
+                            local isChroma = "No"
+                            local tagsFrame = child:FindFirstChild("Tags")
+                            if tagsFrame and tagsFrame:FindFirstChild("Chroma") then
+                                isChroma = "Yes"
+                            end
+                            
                             local itemName = "Unknown Item"
                             local nameLabel = itemNameFrame:FindFirstChildWhichIsA("TextLabel")
                             if nameLabel and nameLabel.Text ~= "" then
                                 itemName = nameLabel.Text
                             end
                             
-                            local key = itemName .. "_" .. rarity
+                            local key = itemName .. "_" .. rarity .. "_" .. isChroma
                             items[key] = {
                                 Name = itemName,
                                 Rarity = rarity,
+                                Chroma = isChroma,
                                 Amount = amount,
                                 Color = itemNameFrame.BackgroundColor3
                             }
@@ -533,8 +548,8 @@ local function processWebhookQueue()
                         
                         table.insert(batch, {
                             ["title"] = "🎉 New Item Acquired! 🎉",
-                            ["description"] = string.format("**Account:** %s\n**Item Received:** %s\n**Rarity:** %s\n**Amount Gained:** %d\n**Total Owned Now:** %d", 
-                                tostring(LocalPlayer.Name), tostring(itemData.Name), rarityStr, tonumber(gainedAmount) or 1, tonumber(itemData.Amount) or 1),
+                            ["description"] = string.format("**Account:** %s\n**Item Received:** %s\n**Rarity:** %s\n**Chroma:** %s\n**Amount Gained:** %d\n**Total Owned Now:** %d", 
+                                tostring(LocalPlayer.Name), tostring(itemData.Name), rarityStr, tostring(itemData.Chroma), tonumber(gainedAmount) or 1, tonumber(itemData.Amount) or 1),
                             ["color"] = decColor
                         })
                         
@@ -630,6 +645,8 @@ local function checkInventoryChanges()
     return gainedAny
 end
 
+local itemsGainedThisTrade = false
+
 task.spawn(function()
     while not inventoryInitialized do
         pcall(checkInventoryChanges)
@@ -641,7 +658,7 @@ task.spawn(function()
         pcall(function()
             local itemsGained = checkInventoryChanges()
             if itemsGained then
-                getgenv().ItemsGainedDuringTrade = true
+                itemsGainedThisTrade = true
                 task.spawn(function()
                     task.wait(2)
                     local randMsg = thankMessages[math.random(1, #thankMessages)]
@@ -776,34 +793,38 @@ task.spawn(function()
     local msg1Index = 1
     local msg2Index = 1
     
-    local hasTraded = false
-    local postTradeTimer = 0
+    local noTradeTimer = 10
+    local wasActiveLastCheck = false
+    local hasTradedInServer = false
 
     while true do
         task.wait(0.5)
         
-        if isTradeActive() then
-            if not hasTraded then
-                getgenv().ItemsGainedDuringTrade = false
-            end
-            hasTraded = true
-            postTradeTimer = 10
+        local currentlyActive = isTradeActive()
+        
+        if currentlyActive then
+            hasTradedInServer = true
+            wasActiveLastCheck = true
+            noTradeTimer = 10
             continue
         end
         
-        if hasTraded then
-            task.wait(0.25)
-            local immediateScan = checkInventoryChanges()
-            if immediateScan then
-                getgenv().ItemsGainedDuringTrade = true
-            end
+        if wasActiveLastCheck and not currentlyActive then
+            wasActiveLastCheck = false
+            noTradeTimer = 10
             
-            if not getgenv().ItemsGainedDuringTrade then
-                serverHop()
-                return
-            else
-                postTradeTimer = postTradeTimer - 0.5
-                if postTradeTimer <= 0 then
+            task.spawn(function()
+                task.wait(0.5)
+                if checkInventoryChanges() then
+                    itemsGainedThisTrade = true
+                end
+            end)
+        end
+        
+        if hasTradedInServer then
+            if noTradeTimer > 0 then
+                noTradeTimer = noTradeTimer - 0.5
+                if noTradeTimer <= 0 then
                     serverHop()
                     return
                 end
