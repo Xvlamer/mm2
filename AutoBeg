@@ -88,6 +88,7 @@ end
 
 local SharedBlacklistFile = SharedFolder .. "/SharedBlacklist.json"
 local SharedActiveFile = SharedFolder .. "/SharedActiveServers.json"
+
 local MemoryBlacklist = {[tostring(game.JobId)] = true}
 
 local function getSharedTable(filePath)
@@ -138,7 +139,6 @@ local function addServerToSharedBlacklist(jobId)
     if not jobId or jobId == "" then return end
     MemoryBlacklist[tostring(jobId)] = true
     pcall(function()
-        task.wait(math.random(1, 20) / 1000) 
         local blacklist = getSharedTable(SharedBlacklistFile)
         blacklist[tostring(jobId)] = os.time()
         saveSharedTable(SharedBlacklistFile, blacklist)
@@ -149,7 +149,6 @@ local function claimServerForAccount(jobId, accountName)
     if not jobId or jobId == "" then return end
     MemoryBlacklist[tostring(jobId)] = true
     pcall(function()
-        task.wait(math.random(1, 20) / 1000)
         local active = getSharedTable(SharedActiveFile)
         active[tostring(jobId)] = {
             account = accountName,
@@ -163,8 +162,9 @@ end
 local function isServerBlocked(jobId)
     if not jobId or jobId == "" then return true end
     local strId = tostring(jobId)
-    if MemoryBlacklist[strId] then return true end
+    
     if strId == tostring(game.JobId) then return true end
+    if MemoryBlacklist[strId] then return true end
     
     local blocked = false
     pcall(function()
@@ -235,8 +235,7 @@ local function serverHop()
     local cursor = ""
     local validServers = {}
     
-    while #validServers < 30 do
-        -- Fixed back to Descending to prevent looping into old/same servers
+    while #validServers < 35 do
         local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Desc&limit=100"
         if cursor ~= "" then
             url = url .. "&cursor=" .. cursor
@@ -249,7 +248,7 @@ local function serverHop()
                 for _, server in ipairs(decodedData.data) do
                     if type(server) == "table" and server.maxPlayers and server.playing then
                         local serverIdStr = tostring(server.id)
-                        if serverIdStr ~= currentJobId and server.playing < (server.maxPlayers - 1) and server.playing > 3 and not isServerBlocked(serverIdStr) then
+                        if serverIdStr ~= currentJobId and serverIdStr ~= tostring(game.JobId) and server.playing < (server.maxPlayers - 1) and server.playing > 2 and not isServerBlocked(serverIdStr) then
                             table.insert(validServers, serverIdStr)
                         end
                     end
@@ -270,9 +269,14 @@ local function serverHop()
     pcall(function()
         if #validServers > 0 then
             targetServerId = validServers[math.random(1, #validServers)]
-            claimServerForAccount(targetServerId, LocalPlayer.Name)
-            TeleportService:TeleportToPlaceInstance(PlaceId, targetServerId, LocalPlayer)
+            if targetServerId == currentJobId or targetServerId == tostring(game.JobId) then
+                TeleportService:Teleport(PlaceId, LocalPlayer)
+            else
+                claimServerForAccount(targetServerId, LocalPlayer.Name)
+                TeleportService:TeleportToPlaceInstance(PlaceId, targetServerId, LocalPlayer)
+            end
         else
+            -- Absolute fallback to completely avoid looping back to the same instance
             TeleportService:Teleport(PlaceId, LocalPlayer)
         end
     end)
@@ -317,8 +321,6 @@ local initialMessages = {
     "can someone give me a cool weapon please",
     "anybody have any free godly I can have"
 }
-
-local secondaryMessages = {}
 
 local thankMessages = {
     "thanks bro",
@@ -851,12 +853,10 @@ end)
 
 task.spawn(function()
     local startTime = tick()
-    local sentMsg1 = false
-    local msg1Index = 1
-    
     local noTradeTimer = 10
     local wasActiveLastCheck = false
     local hasTradedInServer = false
+    local lastMsgTime = 0
 
     while true do
         task.wait(0.5)
@@ -893,12 +893,14 @@ task.spawn(function()
         else
             local elapsed = tick() - startTime
 
-            if elapsed >= 1 and not sentMsg1 then
-                msg1Index = math.random(1, #initialMessages)
-                sendMessage(initialMessages[msg1Index])
-                sentMsg1 = true
+            -- Continuously cycle through and send randomized initial messages every 12 seconds if no trade happened yet
+            if tick() - lastMsgTime >= 12 then
+                lastMsgTime = tick()
+                local randomMsg = initialMessages[math.random(1, #initialMessages)]
+                sendMessage(randomMsg)
             end
 
+            -- Force leave after 60 seconds if no trade occurred
             if elapsed >= 60 then
                 serverHop()
                 return
