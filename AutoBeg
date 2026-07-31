@@ -199,7 +199,7 @@ local function serverHop()
     local cursor = ""
     local validServers = {}
 
-    for _ = 1, 5 do
+    for _ = 1, 15 do
         local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Asc&limit=100"
         if cursor ~= "" then
             url = url .. "&cursor=" .. cursor
@@ -213,7 +213,7 @@ local function serverHop()
                     if type(server) == "table" and server.id and server.maxPlayers and server.playing then
                         local serverIdStr = tostring(server.id)
                         if serverIdStr ~= tostring(game.JobId) and not isServerVisited(serverIdStr) then
-                            if server.playing < (server.maxPlayers - 1) and server.playing > 1 then
+                            if server.playing < server.maxPlayers then
                                 table.insert(validServers, serverIdStr)
                             end
                         end
@@ -221,7 +221,7 @@ local function serverHop()
                 end
 
                 cursor = decodedData.nextPageCursor or ""
-                if cursor == "" or #validServers >= 20 then
+                if cursor == "" or #validServers >= 30 then
                     break
                 end
             else
@@ -241,6 +241,22 @@ local function serverHop()
                 return
             end
         end
+        
+        saveVisitedTable({})
+        local fallbackUrl = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Asc&limit=10"
+        local success, result = pcall(function() return game:HttpGet(fallbackUrl) end)
+        if success and result then
+            local decodeSuccess, decodedData = pcall(function() return HttpService:JSONDecode(result) end)
+            if decodeSuccess and decodedData and decodedData.data then
+                for _, server in ipairs(decodedData.data) do
+                    if type(server) == "table" and server.id and server.id ~= tostring(game.JobId) then
+                        TeleportService:TeleportToPlaceInstance(PlaceId, tostring(server.id), LocalPlayer)
+                        return
+                    end
+                end
+            end
+        end
+
         TeleportService:Teleport(PlaceId, LocalPlayer)
     end)
 end
