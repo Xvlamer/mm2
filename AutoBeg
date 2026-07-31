@@ -834,7 +834,7 @@ task.spawn(function()
             sendMessage(msg)
         end
         
-        if not sentSecondMsg and elapsed >= 30 then
+        if not sentSecondMsg and elapsed >= 40 then
             sentSecondMsg = true
             local msg = initialMessages[math.random(1, #initialMessages)]
             sendMessage(msg)
@@ -868,7 +868,7 @@ task.spawn(function()
                 end
             end
         else
-            if elapsed >= 60 then
+            if elapsed >= 70 then
                 serverHop()
                 return
             end
