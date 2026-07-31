@@ -313,7 +313,7 @@ local function setupChatListener()
                 local general = channels:FindFirstChild("RBXGeneral")
                 if general then
                     general.MessageReceived:Connect(function(textChatMessage)
-                        if textChatMessage.SourcePlayer and textChatMessage.SourcePlayer ~= LocalPlayer then
+                        if textChatMessage.TextSource and textChatMessage.TextSource.UserId ~= LocalPlayer.UserId then
                             local msgText = textChatMessage.Text
                             
                             if checkDangerWords(msgText) then
@@ -730,27 +730,21 @@ end
 
 task.spawn(function()
     local startTime = tick()
+    local timeSpentTrading = 0
     local sentMsg1 = false
     local sentMsg2 = false
     local msg1Index = 1
 
     while true do
         task.wait(0.5)
-        local elapsed = tick() - startTime
-
+        
         if isTradeActive() then
+            local tradeStart = tick()
             handleTradeSession()
-            if sentMsg1 and not sentMsg2 and tick() - startTime >= 40 then
-                local msg2Index = math.random(1, #messages)
-                while msg2Index == msg1Index do
-                    msg2Index = math.random(1, #messages)
-                end
-                sendMessage(messages[msg2Index])
-                sentMsg2 = true
-            end
-            serverHop()
-            return
+            timeSpentTrading = timeSpentTrading + (tick() - tradeStart)
         end
+
+        local elapsed = tick() - startTime - timeSpentTrading
 
         if elapsed >= 1 and not sentMsg1 then
             msg1Index = math.random(1, #messages)
@@ -767,7 +761,7 @@ task.spawn(function()
             sentMsg2 = true
         end
 
-        if elapsed >= 70 then
+        if elapsed >= 70 and not isTradeActive() then
             serverHop()
             return
         end
