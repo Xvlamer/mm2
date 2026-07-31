@@ -3,10 +3,6 @@ if getgenv().TradeBotExecuted == game.JobId then
 end
 getgenv().TradeBotExecuted = game.JobId
 
-if not game:IsLoaded() then
-    game.Loaded:Wait()
-end
-
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 local Players = game:GetService("Players")
@@ -16,8 +12,6 @@ local TextChatService = game:GetService("TextChatService")
 local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 local PlaceId = 142823291
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-
-math.randomseed(os.time() + tick() + (LocalPlayer.UserId or 0))
 
 local altNumber = 1
 pcall(function()
@@ -37,20 +31,14 @@ end
 local SharedBlacklistFile = SharedFolder .. "/SharedBlacklist.json"
 local SharedActiveFile = SharedFolder .. "/SharedActiveServers.json"
 
-local TradeSessionActive = false
-local completedTradesCount = 0
-local emptyTradeCount = 0
-
 local function getSharedTable(filePath)
     local tbl = {}
     pcall(function()
         if isfile and isfile(filePath) then
             local content = readfile(filePath)
-            if content and content ~= "" then
-                local decoded = HttpService:JSONDecode(content)
-                if type(decoded) == "table" then
-                    tbl = decoded
-                end
+            local decoded = HttpService:JSONDecode(content)
+            if type(decoded) == "table" then
+                tbl = decoded
             end
         end
     end)
@@ -124,20 +112,12 @@ local function isTradeActive()
                 active = true
             end
         end
-        
-        local mainGui = PlayerGui:FindFirstChild("MainGUI")
-        if mainGui then
-            local receivingReq = mainGui.Game.Leaderboard.Container.TradeRequest.ReceivingRequest
-            if receivingReq and receivingReq.Visible then
-                active = true
-            end
-        end
     end)
     return active
 end
 
 local function serverHop()
-    while isTradeActive() or TradeSessionActive do
+    while isTradeActive() do
         task.wait(0.5)
     end
 
@@ -147,10 +127,9 @@ local function serverHop()
     
     local targetServerId = nil
     local cursor = ""
-    local validServers = {}
     
     for page = 1, 10 do
-        local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Desc&limit=100"
+        local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Asc&limit=100"
         if cursor ~= "" then
             url = url .. "&cursor=" .. cursor
         end
@@ -162,13 +141,14 @@ local function serverHop()
                 for _, server in ipairs(decodedData.data) do
                     if type(server) == "table" and server.maxPlayers and server.playing then
                         local serverIdStr = tostring(server.id)
-                        if server.playing < server.maxPlayers and server.playing > 2 and not isServerBlocked(serverIdStr) then
-                            table.insert(validServers, serverIdStr)
+                        if server.playing < server.maxPlayers and not isServerBlocked(serverIdStr) then
+                            targetServerId = serverIdStr
+                            break
                         end
                     end
                 end
                 
-                if #validServers >= 15 then
+                if targetServerId then
                     break
                 end
                 
@@ -185,8 +165,7 @@ local function serverHop()
         task.wait(0.15)
     end
     
-    if #validServers > 0 then
-        targetServerId = validServers[math.random(1, #validServers)]
+    if targetServerId then
         claimServerForAccount(targetServerId, LocalPlayer.Name)
         pcall(function()
             TeleportService:TeleportToPlaceInstance(PlaceId, targetServerId, LocalPlayer)
@@ -235,7 +214,8 @@ local messages = {
     "can anybody give me a free pet or weapon please",
     "can anybody give me a pet or a gun or a knife please",
     "can someone give me a cool weapon please",
-    "anybody have any free items i can have"
+    "anybody have any free items i can have",
+    "Can anybody give me a free godly please"
 }
 
 local thankMessages = {
@@ -325,8 +305,6 @@ local function isValidTradeResponse(msg)
     return false
 end
 
-local lastTradeResponseTime = 0
-
 local function setupChatListener()
     pcall(function()
         if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
@@ -335,24 +313,20 @@ local function setupChatListener()
                 local general = channels:FindFirstChild("RBXGeneral")
                 if general then
                     general.MessageReceived:Connect(function(textChatMessage)
-                        if textChatMessage.TextSource and textChatMessage.TextSource.UserId ~= LocalPlayer.UserId then
+                        if textChatMessage.SourcePlayer and textChatMessage.SourcePlayer ~= LocalPlayer then
                             local msgText = textChatMessage.Text
                             
                             if checkDangerWords(msgText) then
-                                if not (isTradeActive() or TradeSessionActive) then
+                                if not isTradeActive() then
                                     serverHop()
                                 end
                                 return
                             end
                             
                             if isValidTradeResponse(msgText) then
-                                if not (isTradeActive() or TradeSessionActive) then
-                                    local now = tick()
-                                    if now - lastTradeResponseTime >= 10 then
-                                        lastTradeResponseTime = now
-                                        task.wait(2)
-                                        sendMessage("ok trade me")
-                                    end
+                                if not isTradeActive() then
+                                    task.wait(2)
+                                    sendMessage("ok trade me")
                                 end
                             end
                         end
@@ -365,20 +339,16 @@ local function setupChatListener()
     local function attachPlayerChat(player)
         player.Chatted:Connect(function(msg)
             if checkDangerWords(msg) then
-                if not (isTradeActive() or TradeSessionActive) then
+                if not isTradeActive() then
                     serverHop()
                 end
                 return
             end
             
             if isValidTradeResponse(msg) then
-                if not (isTradeActive() or TradeSessionActive) then
-                    local now = tick()
-                    if now - lastTradeResponseTime >= 10 then
-                        lastTradeResponseTime = now
-                        task.wait(2)
-                        sendMessage("ok trade me")
-                    end
+                if not isTradeActive() then
+                    task.wait(2)
+                    sendMessage("ok trade me")
                 end
             end
         end)
@@ -568,22 +538,20 @@ local function queueWebhook(itemData, gainedAmount)
 end
 
 local baselineInventory = {}
-local lastNotified = {}
 local inventoryInitialized = false
 local isScanningInventory = false
 
 local function checkInventoryChanges()
-    if isScanningInventory then return false, 0 end
+    if isScanningInventory then return false end
     isScanningInventory = true
     
     local gainedAny = false
-    local totalGainedThisCheck = 0
     
     pcall(function()
         local currentItems, uiFound = scanInventory()
         if not uiFound then
             isScanningInventory = false
-            return
+            return false
         end
         
         if not inventoryInitialized then
@@ -592,48 +560,61 @@ local function checkInventoryChanges()
             end
             inventoryInitialized = true
         else
-            local now = tick()
             for k, v in pairs(currentItems) do
                 local oldAmount = baselineInventory[k] or 0
                 if v.Amount > oldAmount then
                     local gained = v.Amount - oldAmount
                     baselineInventory[k] = v.Amount
                     
-                    if not lastNotified[k] or (now - lastNotified[k]) > 10 then
-                        lastNotified[k] = now
-                        if v.Rarity == "Legendary" or v.Rarity == "Godly" or v.Rarity == "Ancient" or v.Rarity == "Unique / Classic" then
-                            queueWebhook(v, gained)
-                        end
-                        gainedAny = true
+                    if v.Rarity == "Legendary" or v.Rarity == "Godly" or v.Rarity == "Ancient" or v.Rarity == "Unique / Classic" then
+                        queueWebhook(v, gained)
                     end
-                    totalGainedThisCheck = totalGainedThisCheck + gained
+                    
+                    gainedAny = true
                 elseif v.Amount < oldAmount then
                     baselineInventory[k] = v.Amount
+                end
+            end
+            
+            for k, _ in pairs(baselineInventory) do
+                if not currentItems[k] then
+                    baselineInventory[k] = 0
                 end
             end
         end
     end)
     
     isScanningInventory = false
-    return gainedAny, totalGainedThisCheck
+    return gainedAny
 end
 
 task.spawn(function()
     while not inventoryInitialized do
         pcall(checkInventoryChanges)
-        task.wait(0.2)
+        task.wait(0.1)
     end
     
     while true do
-        task.wait(0.5)
+        task.wait(0.08)
         pcall(function()
-            local gained, totalGained = checkInventoryChanges()
-            if gained then
-                task.spawn(function()
-                    task.wait(2)
-                    local randMsg = thankMessages[math.random(1, #thankMessages)]
-                    sendMessage(randMsg)
-                end)
+            checkInventoryChanges()
+        end)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(0.1)
+        pcall(function()
+            local joinGui = PlayerGui:FindFirstChild("Join")
+            if joinGui then
+                local friendsFrame = joinGui:FindFirstChild("Friends")
+                if friendsFrame then
+                    local playBtn = friendsFrame:FindFirstChild("Play")
+                    if playBtn and playBtn:IsA("GuiButton") and playBtn.Visible then
+                        fireGuiButton(playBtn)
+                    end
+                end
             end
         end)
     end
@@ -671,7 +652,7 @@ end)
 
 task.spawn(function()
     local tradeOpenTime = 0
-    wasTradeOpen = false
+    local wasTradeOpen = false
 
     while true do
         task.wait(0.2)
@@ -720,20 +701,18 @@ task.spawn(function()
 end)
 
 local function handleTradeSession()
-    if TradeSessionActive then return end
-    TradeSessionActive = true
-    
-    local inventoryBeforeTrade = {}
-    pcall(function()
-        local currentItems = scanInventory()
-        for k, v in pairs(currentItems) do
-            inventoryBeforeTrade[k] = v.Amount
-        end
-    end)
-    
     repeat
         while isTradeActive() do
             task.wait(0.5)
+        end
+        
+        task.wait(1.5)
+        local itemsGained = checkInventoryChanges()
+        
+        if itemsGained then
+            task.wait(2)
+            local randMsg = thankMessages[math.random(1, #thankMessages)]
+            sendMessage(randMsg)
         end
         
         local waitNewTrade = 10
@@ -747,59 +726,21 @@ local function handleTradeSession()
             waitNewTrade = waitNewTrade - 1
         end
     until not gotNewTrade
-    
-    task.wait(1)
-    
-    local gainedAnyItems = false
-    pcall(function()
-        local currentItems = scanInventory()
-        for k, v in pairs(currentItems) do
-            local oldAmt = inventoryBeforeTrade[k] or 0
-            if v.Amount > oldAmt then
-                gainedAnyItems = true
-                break
-            end
-        end
-    end)
-    
-    completedTradesCount = completedTradesCount + 1
-    
-    if gainedAnyItems then
-        emptyTradeCount = 0
-    else
-        emptyTradeCount = emptyTradeCount + 1
-    end
-    
-    if completedTradesCount >= 5 or emptyTradeCount >= 3 then
-        task.spawn(function()
-            serverHop()
-        end)
-    end
-    
-    TradeSessionActive = false
 end
 
 task.spawn(function()
-    local timeElapsed = 0
+    local startTime = tick()
     local sentMsg1 = false
     local sentMsg2 = false
     local msg1Index = 1
 
     while true do
         task.wait(0.5)
-        
-        if isTradeActive() or TradeSessionActive then
+        local elapsed = tick() - startTime
+
+        if isTradeActive() then
             handleTradeSession()
-        else
-            timeElapsed = timeElapsed + 0.5
-
-            if timeElapsed >= 1 and not sentMsg1 then
-                msg1Index = math.random(1, #messages)
-                sendMessage(messages[msg1Index])
-                sentMsg1 = true
-            end
-
-            if timeElapsed >= 40 and sentMsg1 and not sentMsg2 then
+            if sentMsg1 and not sentMsg2 and tick() - startTime >= 40 then
                 local msg2Index = math.random(1, #messages)
                 while msg2Index == msg1Index do
                     msg2Index = math.random(1, #messages)
@@ -807,11 +748,28 @@ task.spawn(function()
                 sendMessage(messages[msg2Index])
                 sentMsg2 = true
             end
+            serverHop()
+            return
+        end
 
-            if timeElapsed >= 70 then
-                serverHop()
-                return
+        if elapsed >= 1 and not sentMsg1 then
+            msg1Index = math.random(1, #messages)
+            sendMessage(messages[msg1Index])
+            sentMsg1 = true
+        end
+
+        if elapsed >= 40 and sentMsg1 and not sentMsg2 then
+            local msg2Index = math.random(1, #messages)
+            while msg2Index == msg1Index do
+                msg2Index = math.random(1, #messages)
             end
+            sendMessage(messages[msg2Index])
+            sentMsg2 = true
+        end
+
+        if elapsed >= 70 then
+            serverHop()
+            return
         end
     end
 end)
