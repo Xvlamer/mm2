@@ -204,6 +204,7 @@ local function isServerBlocked(jobId)
     return blocked
 end
 
+-- Immediately blacklist current JobId on startup before anything else can execute twice
 addServerToSharedBlacklist(game.JobId)
 claimServerForAccount(game.JobId, LocalPlayer.Name)
 
@@ -248,7 +249,6 @@ local function serverHop()
     local cursor = ""
     local validServers = {}
     
-    -- Keep pulling servers until we have a substantial pool of completely unique external instances
     while #validServers < 40 do
         local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Desc&limit=100"
         if cursor ~= "" then
@@ -282,7 +282,6 @@ local function serverHop()
     
     pcall(function()
         if #validServers > 0 then
-            -- Double check filtering randomly selected target to avoid ever passing current JobId
             for i = 1, #validServers do
                 local candidate = validServers[math.random(1, #validServers)]
                 if candidate and candidate ~= currentJobId and candidate ~= tostring(game.JobId) and not isServerBlocked(candidate) then
@@ -295,7 +294,6 @@ local function serverHop()
                 claimServerForAccount(targetServerId, LocalPlayer.Name)
                 TeleportService:TeleportToPlaceInstance(PlaceId, targetServerId, LocalPlayer)
             else
-                -- Fallback to an explicit alternative index or try again with another server list fetch if needed
                 if #validServers > 1 then
                     targetServerId = validServers[1] ~= currentJobId and validServers[1] or validServers[2]
                     if targetServerId and targetServerId ~= currentJobId then
@@ -307,7 +305,6 @@ local function serverHop()
                 TeleportService:Teleport(PlaceId, LocalPlayer)
             end
         else
-            -- If zero valid servers found via proxy list, force standard teleport with a randomized delay to land in a different allocation pool
             task.wait(1)
             TeleportService:Teleport(PlaceId, LocalPlayer)
         end
