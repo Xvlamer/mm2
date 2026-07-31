@@ -107,7 +107,6 @@ claimServerForAccount(game.JobId, LocalPlayer.Name)
 local function isTradeActive()
     local active = false
     pcall(function()
-        -- Check if main trade GUI is open
         local tradeGui = PlayerGui:FindFirstChild("TradeGUI")
         if tradeGui and tradeGui.Enabled then
             local container = tradeGui:FindFirstChild("Container")
@@ -116,7 +115,6 @@ local function isTradeActive()
             end
         end
         
-        -- Check if an incoming trade request is currently on the screen
         local mainGui = PlayerGui:FindFirstChild("MainGUI")
         if mainGui then
             local receivingReq = mainGui.Game.Leaderboard.Container.TradeRequest.ReceivingRequest
@@ -129,7 +127,6 @@ local function isTradeActive()
 end
 
 local function serverHop()
-    -- Wait for ALL trade activities (including the 10s delay buffer) to finish before hopping
     while isTradeActive() or TradeSessionActive do
         task.wait(0.5)
     end
@@ -227,8 +224,7 @@ local messages = {
     "can anybody give me a free pet or weapon please",
     "can anybody give me a pet or a gun or a knife please",
     "can someone give me a cool weapon please",
-    "anybody have any free items i can have",
-    "Can anybody give me a free godly please"
+    "anybody have any free items i can have"
 }
 
 local thankMessages = {
@@ -718,12 +714,10 @@ local function handleTradeSession()
     TradeSessionActive = true
     
     repeat
-        -- Wait until the trade window explicitly closes
         while isTradeActive() do
             task.wait(0.5)
         end
         
-        -- The GUI closed. Give it up to 5 seconds to register inventory changes (e.g. server delay)
         local itemsGained = false
         for i = 1, 10 do
             task.wait(0.5)
@@ -739,7 +733,6 @@ local function handleTradeSession()
             sendMessage(randMsg)
         end
         
-        -- Wait 10 seconds to see if they want to trade again
         local waitNewTrade = 10
         local gotNewTrade = false
         while waitNewTrade > 0 do
@@ -764,11 +757,9 @@ task.spawn(function()
     while true do
         task.wait(0.5)
         
-        -- Completely freeze the countdown timer if a trade or request is active
         if isTradeActive() or TradeSessionActive then
             handleTradeSession()
         else
-            -- Only advance the timer when we are standing around doing nothing
             timeElapsed = timeElapsed + 0.5
 
             if timeElapsed >= 1 and not sentMsg1 then
