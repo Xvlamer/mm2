@@ -1,3 +1,8 @@
+if getgenv().TradeBotExecuted == game.JobId then
+    return
+end
+getgenv().TradeBotExecuted = game.JobId
+
 if not game:IsLoaded() then
     game.Loaded:Wait()
 end
@@ -33,6 +38,8 @@ local SharedBlacklistFile = SharedFolder .. "/SharedBlacklist.json"
 local SharedActiveFile = SharedFolder .. "/SharedActiveServers.json"
 
 local TradeSessionActive = false
+local completedTradesCount = 0
+local emptyTradeCount = 0
 
 local function getSharedTable(filePath)
     local tbl = {}
@@ -61,7 +68,6 @@ end
 local function addServerToSharedBlacklist(jobId)
     if not jobId or jobId == "" then return end
     pcall(function()
-        -- Always read the freshest data to prevent bot accounts from overwriting each other's files
         local blacklist = getSharedTable(SharedBlacklistFile)
         blacklist[tostring(jobId)] = os.time()
         saveSharedTable(SharedBlacklistFile, blacklist)
@@ -180,7 +186,6 @@ local function serverHop()
     end
     
     if #validServers > 0 then
-        -- Randomize selection so all bot instances don't target the exact same server simultaneously
         targetServerId = validServers[math.random(1, #validServers)]
         claimServerForAccount(targetServerId, LocalPlayer.Name)
         pcall(function()
@@ -320,6 +325,8 @@ local function isValidTradeResponse(msg)
     return false
 end
 
+local lastTradeResponseTime = 0
+
 local function setupChatListener()
     pcall(function()
         if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
@@ -340,8 +347,12 @@ local function setupChatListener()
                             
                             if isValidTradeResponse(msgText) then
                                 if not (isTradeActive() or TradeSessionActive) then
-                                    task.wait(2)
-                                    sendMessage("ok trade me")
+                                    local now = tick()
+                                    if now - lastTradeResponseTime >= 10 then
+                                        lastTradeResponseTime = now
+                                        task.wait(2)
+                                        sendMessage("ok trade me")
+                                    end
                                 end
                             end
                         end
@@ -362,8 +373,12 @@ local function setupChatListener()
             
             if isValidTradeResponse(msg) then
                 if not (isTradeActive() or TradeSessionActive) then
-                    task.wait(2)
-                    sendMessage("ok trade me")
+                    local now = tick()
+                    if now - lastTradeResponseTime >= 10 then
+                        lastTradeResponseTime = now
+                        task.wait(2)
+                        sendMessage("ok trade me")
+                    end
                 end
             end
         end)
@@ -553,20 +568,22 @@ local function queueWebhook(itemData, gainedAmount)
 end
 
 local baselineInventory = {}
+local lastNotified = {}
 local inventoryInitialized = false
 local isScanningInventory = false
 
 local function checkInventoryChanges()
-    if isScanningInventory then return false end
+    if isScanningInventory then return false, 0 end
     isScanningInventory = true
     
     local gainedAny = false
+    local totalGainedThisCheck = 0
     
     pcall(function()
         local currentItems, uiFound = scanInventory()
         if not uiFound then
             isScanningInventory = false
-            return false
+            return
         end
         
         if not inventoryInitialized then
@@ -575,44 +592,49 @@ local function checkInventoryChanges()
             end
             inventoryInitialized = true
         else
+            local now = tick()
             for k, v in pairs(currentItems) do
                 local oldAmount = baselineInventory[k] or 0
                 if v.Amount > oldAmount then
                     local gained = v.Amount - oldAmount
                     baselineInventory[k] = v.Amount
                     
-                    if v.Rarity == "Legendary" or v.Rarity == "Godly" or v.Rarity == "Ancient" or v.Rarity == "Unique / Classic" then
-                        queueWebhook(v, gained)
+                    if not lastNotified[k] or (now - lastNotified[k]) > 10 then
+                        lastNotified[k] = now
+                        if v.Rarity == "Legendary" or v.Rarity == "Godly" or v.Rarity == "Ancient" or v.Rarity == "Unique / Classic" then
+                            queueWebhook(v, gained)
+                        end
+                        gainedAny = true
                     end
-                    
-                    gainedAny = true
+                    totalGainedThisCheck = totalGainedThisCheck + gained
                 elseif v.Amount < oldAmount then
                     baselineInventory[k] = v.Amount
-                end
-            end
-            
-            for k, _ in pairs(baselineInventory) do
-                if not currentItems[k] then
-                    baselineInventory[k] = 0
                 end
             end
         end
     end)
     
     isScanningInventory = false
-    return gainedAny
+    return gainedAny, totalGainedThisCheck
 end
 
 task.spawn(function()
     while not inventoryInitialized do
         pcall(checkInventoryChanges)
-        task.wait(0.1)
+        task.wait(0.2)
     end
     
     while true do
-        task.wait(0.08)
+        task.wait(0.5)
         pcall(function()
-            checkInventoryChanges()
+            local gained, totalGained = checkInventoryChanges()
+            if gained then
+                task.spawn(function()
+                    task.wait(2)
+                    local randMsg = thankMessages[math.random(1, #thankMessages)]
+                    sendMessage(randMsg)
+                end)
+            end
         end)
     end
 end)
@@ -649,7 +671,7 @@ end)
 
 task.spawn(function()
     local tradeOpenTime = 0
-    local wasTradeOpen = false
+    wasTradeOpen = false
 
     while true do
         task.wait(0.2)
@@ -701,24 +723,17 @@ local function handleTradeSession()
     if TradeSessionActive then return end
     TradeSessionActive = true
     
+    local inventoryBeforeTrade = {}
+    pcall(function()
+        local currentItems = scanInventory()
+        for k, v in pairs(currentItems) do
+            inventoryBeforeTrade[k] = v.Amount
+        end
+    end)
+    
     repeat
         while isTradeActive() do
             task.wait(0.5)
-        end
-        
-        local itemsGained = false
-        for i = 1, 10 do
-            task.wait(0.5)
-            if checkInventoryChanges() then
-                itemsGained = true
-                break
-            end
-        end
-        
-        if itemsGained then
-            task.wait(2)
-            local randMsg = thankMessages[math.random(1, #thankMessages)]
-            sendMessage(randMsg)
         end
         
         local waitNewTrade = 10
@@ -732,6 +747,34 @@ local function handleTradeSession()
             waitNewTrade = waitNewTrade - 1
         end
     until not gotNewTrade
+    
+    task.wait(1)
+    
+    local gainedAnyItems = false
+    pcall(function()
+        local currentItems = scanInventory()
+        for k, v in pairs(currentItems) do
+            local oldAmt = inventoryBeforeTrade[k] or 0
+            if v.Amount > oldAmt then
+                gainedAnyItems = true
+                break
+            end
+        end
+    end)
+    
+    completedTradesCount = completedTradesCount + 1
+    
+    if gainedAnyItems then
+        emptyTradeCount = 0
+    else
+        emptyTradeCount = emptyTradeCount + 1
+    end
+    
+    if completedTradesCount >= 5 or emptyTradeCount >= 3 then
+        task.spawn(function()
+            serverHop()
+        end)
+    end
     
     TradeSessionActive = false
 end
