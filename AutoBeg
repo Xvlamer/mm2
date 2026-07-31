@@ -243,12 +243,20 @@ Players.PlayerAdded:Connect(function(player)
     end)
 end)
 
-local messages = {
+local initialMessages = {
     "can somebody give me a free weapon please",
     "can anybody give me a free pet or weapon please",
     "can anybody give me a pet or a gun or a knife please",
     "can someone give me a cool weapon please",
     "anybody have any free items i can have"
+}
+
+local secondaryMessages = {
+    "any generous people willing to trade spare items",
+    "looking for any extra gear people dont use",
+    "trading or giving away any unwanted weapons",
+    "anyone feeling nice enough to drop some extra items",
+    "lets do a quick trade for random spare items"
 }
 
 local thankMessages = {
@@ -766,6 +774,7 @@ task.spawn(function()
     local sentMsg1 = false
     local sentMsg2 = false
     local msg1Index = 1
+    local msg2Index = 1
     
     local hasTraded = false
     local postTradeTimer = 0
@@ -803,17 +812,14 @@ task.spawn(function()
             local elapsed = tick() - startTime
 
             if elapsed >= 1 and not sentMsg1 then
-                msg1Index = math.random(1, #messages)
-                sendMessage(messages[msg1Index])
+                msg1Index = math.random(1, #initialMessages)
+                sendMessage(initialMessages[msg1Index])
                 sentMsg1 = true
             end
 
             if elapsed >= 30 and sentMsg1 and not sentMsg2 then
-                local msg2Index = math.random(1, #messages)
-                while msg2Index == msg1Index do
-                    msg2Index = math.random(1, #messages)
-                end
-                sendMessage(messages[msg2Index])
+                msg2Index = math.random(1, #secondaryMessages)
+                sendMessage(secondaryMessages[msg2Index])
                 sentMsg2 = true
             end
 
