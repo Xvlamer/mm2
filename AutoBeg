@@ -151,7 +151,6 @@ local function isServerVisited(jobId)
     return false
 end
 
--- Immediately blacklist current job ID upon joining and double-check if we've been here before
 markServerVisited(game.JobId)
 
 local function isTradeActive()
@@ -227,13 +226,11 @@ local function serverHop()
     end)
 end
 
--- Immediate check upon execution: If we accidentally joined a blacklisted server, hop out instantly!
 task.spawn(function()
     task.wait(1.5)
     local visited = getVisitedTable()
     local currentId = tostring(game.JobId)
     
-    -- Check if we've recorded this server before *other* than the initial entry mark
     local matchCount = 0
     for id, _ in pairs(visited) do
         if id == currentId then
@@ -827,6 +824,22 @@ task.spawn(function()
     local wasActiveLastCheck = false
     local hasTradedInServer = false
     
+    local initialMessages = {
+        "can somebody give me a free weapon please",
+        "can anybody give me a free pet or weapon please",
+        "can anybody give me a pet or a gun or a knife please",
+        "anybody have any free godly I can have"
+    }
+    
+    local availableIndices = {1, 2, 3, 4}
+    for i = #availableIndices, 2, -1 do
+        local j = math.random(i)
+        availableIndices[i], availableIndices[j] = availableIndices[j], availableIndices[i]
+    end
+    
+    local msgCountToSend = math.random(1, 2)
+    local sentMessagesCount = 0
+    
     local sentFirstMsg = false
     local sentSecondMsg = false
 
@@ -836,16 +849,18 @@ task.spawn(function()
         local currentlyActive = isTradeActive()
         local elapsed = tick() - startTime
         
-        if not sentFirstMsg and elapsed >= 1 then
+        if not sentFirstMsg and elapsed >= 1 and sentMessagesCount < msgCountToSend and #availableIndices > 0 then
             sentFirstMsg = true
-            local msg = initialMessages[math.random(1, #initialMessages)]
-            sendMessage(msg)
+            sentMessagesCount = sentMessagesCount + 1
+            local index = table.remove(availableIndices, 1)
+            sendMessage(initialMessages[index])
         end
         
-        if not sentSecondMsg and elapsed >= 40 then
+        if not sentSecondMsg and elapsed >= 40 and sentMessagesCount < msgCountToSend and #availableIndices > 0 then
             sentSecondMsg = true
-            local msg = initialMessages[math.random(1, #initialMessages)]
-            sendMessage(msg)
+            sentMessagesCount = sentMessagesCount + 1
+            local index = table.remove(availableIndices, 1)
+            sendMessage(initialMessages[index])
         end
 
         if currentlyActive then
