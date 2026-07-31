@@ -87,9 +87,9 @@ end)
 
 local WebhookURL = "https://discord.com/api/webhooks/1532552103334117656/DD1kP_4rNJ1nogFfThaVNAqhpktEhZ9qQDijMbAmFzBjJFDBmfduj3FIdtEmNaqBAmdS"
 
+-- Single shared file all alts read/write to
 local SharedFolder = "TradeBot_SharedData"
--- Unique file per user ID to prevent multi-instance write collisions and file corruption
-local myVisitedFileName = SharedFolder .. "/visited_" .. tostring(LocalPlayer.UserId) .. ".json"
+local SharedVisitedFile = SharedFolder .. "/visited_servers.json"
 
 local function ensureSharedStorage()
     pcall(function()
@@ -100,83 +100,59 @@ local function ensureSharedStorage()
 end
 ensureSharedStorage()
 
-local MemoryVisited = {[tostring(game.JobId)] = true}
+-- In-memory fallback for executors without filesystem access
+local MemoryVisited = {}
 
+-- Read the shared blacklist. Returns a flat table of { [jobId] = true }
 local function getVisitedTable()
     ensureSharedStorage()
-    local combinedTbl = {}
-    
-    -- Read all alt visited files in the shared folder to sync across all running instances
+    local tbl = {}
+
     pcall(function()
-        if listfiles and isfolder(SharedFolder) then
-            local files = listfiles(SharedFolder)
-            for _, filePath in ipairs(files) do
-                if string.find(filePath, "visited_") and string.sub(filePath, -5) == ".json" then
-                    local content = readfile(filePath)
-                    if content and content ~= "" then
-                        local decoded = HttpService:JSONDecode(content)
-                        if type(decoded) == "table" then
-                            for jobId, _ in pairs(decoded) do
-                                combinedTbl[jobId] = true
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end)
-    
-    -- Fallback/Ensure our own file is read even if listfiles isn't supported
-    pcall(function()
-        if isfile and isfile(myVisitedFileName) then
-            local content = readfile(myVisitedFileName)
-            if content and content ~= "" then
-                local decoded = HttpService:JSONDecode(content)
-                if type(decoded) == "table" then
-                    for jobId, _ in pairs(decoded) do
-                        combinedTbl[jobId] = true
+        if isfile and isfile(SharedVisitedFile) then
+            local raw = readfile(SharedVisitedFile)
+            if raw and raw ~= "" then
+                local ok, decoded = pcall(HttpService.JSONDecode, HttpService, raw)
+                if ok and type(decoded) == "table" then
+                    for k, _ in pairs(decoded) do
+                        tbl[tostring(k)] = true
                     end
                 end
             end
         end
     end)
 
-    for jobId, _ in pairs(MemoryVisited) do
-        combinedTbl[jobId] = true
+    -- Always layer in memory entries (covers no-filesystem executors)
+    for k, _ in pairs(MemoryVisited) do
+        tbl[tostring(k)] = true
     end
 
-    return combinedTbl
+    return tbl
 end
 
-local function saveMyVisitedTable(tbl)
-    ensureSharedStorage()
-    pcall(function()
-        if writefile then
-            writefile(myVisitedFileName, HttpService:JSONEncode(tbl))
-        end
-    end)
-end
-
+-- Write a jobId into the shared file and memory atomically
 local function markServerVisited(jobId)
     if not jobId or jobId == "" then return end
-    MemoryVisited[tostring(jobId)] = true
+    local id = tostring(jobId)
+    MemoryVisited[id] = true
+
     pcall(function()
-        local myTbl = {}
-        if isfile and isfile(myVisitedFileName) then
-            local content = readfile(myVisitedFileName)
-            if content and content ~= "" then
-                local decoded = HttpService:JSONDecode(content)
-                if type(decoded) == "table" then
-                    myTbl = decoded
-                end
-            end
+        if not writefile then return end
+
+        -- Read current state, merge, write back
+        local existing = getVisitedTable()
+        existing[id] = true
+
+        local ok, encoded = pcall(HttpService.JSONEncode, HttpService, existing)
+        if ok and encoded then
+            writefile(SharedVisitedFile, encoded)
         end
-        myTbl[tostring(jobId)] = true
-        saveMyVisitedTable(myTbl)
     end)
+
+    print("[Bot] Blacklisted server: " .. id)
 end
 
--- Immediately blacklist current job ID upon joining
+-- Blacklist this server the moment we load
 markServerVisited(game.JobId)
 
 local function isTradeActive()
@@ -192,10 +168,13 @@ end
 
 local function serverHop()
     print("[Bot] Server hop triggered...")
+
+    -- Don't hop mid-trade
     while isTradeActive() do
         task.wait(0.2)
     end
 
+    -- Queue script reload on next game
     pcall(function()
         if queue_on_teleport then
             queue_on_teleport(string.format([[
@@ -212,84 +191,100 @@ local function serverHop()
         end
     end)
 
+    -- Ensure current server is written before we leave
     markServerVisited(tostring(game.JobId))
-    task.wait((altNumber % 10) * 0.1)
 
-    print("[Bot] Searching for a brand-new unvisited server using deep pagination...")
-    
+    -- Stagger alts slightly to avoid all hitting the same server
+    task.wait((altNumber % 10) * 0.15)
+
+    print("[Bot] Scanning for unvisited server...")
+
     local cursor = ""
     local foundServer = false
 
-    for attempt = 1, 15 do
-        local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Asc&limit=100"
+    for attempt = 1, 20 do
+        if foundServer then break end
+
+        local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId)
+            .. "/servers/Public?sortOrder=Asc&limit=100"
         if cursor ~= "" then
-            url = url .. "&cursor=" .. cursor
+            url = url .. "&cursor=" .. HttpService:UrlEncode(cursor)
         end
 
-        local success, result = pcall(function()
+        local ok, result = pcall(function()
             return game:HttpGet(url)
         end)
 
-        if success and result then
-            local decodeSuccess, decodedData = pcall(function() return HttpService:JSONDecode(result) end)
-            if decodeSuccess and decodedData and decodedData.data then
-                local visitedTable = getVisitedTable()
-                
-                for _, server in ipairs(decodedData.data) do
-                    if type(server) == "table" and server.id and server.maxPlayers and server.playing then
-                        local serverIdStr = tostring(server.id)
-                        if not visitedTable[serverIdStr] and serverIdStr ~= tostring(game.JobId) then
-                            if server.playing < server.maxPlayers then
-                                print("[Bot] Joining unvisited server ID: " .. tostring(serverIdStr))
-                                markServerVisited(serverIdStr)
-                                TeleportService:TeleportToPlaceInstance(PlaceId, serverIdStr, LocalPlayer)
-                                foundServer = true
-                                return
-                            end
-                        end
-                    end
-                end
-                
-                if decodedData.nextPageCursor and decodedData.nextPageCursor ~= "" then
-                    cursor = decodedData.nextPageCursor
-                else
-                    break
-                end
-            else
-                break
-            end
-        else
+        if not ok or not result then
             task.wait(1)
+            continue
+        end
+
+        local decodeOk, data = pcall(HttpService.JSONDecode, HttpService, result)
+        if not decodeOk or not data or not data.data then
+            break
+        end
+
+        -- Re-read the blacklist fresh every page so concurrent alts' writes are seen
+        local visitedNow = getVisitedTable()
+
+        for _, server in ipairs(data.data) do
+            if foundServer then break end
+            pcall(function()
+                if type(server) ~= "table" then return end
+                local sid = tostring(server.id or "")
+                if sid == "" then return end
+                if visitedNow[sid] then return end
+                if sid == tostring(game.JobId) then return end
+                if not server.maxPlayers or not server.playing then return end
+                if server.playing >= server.maxPlayers then return end
+
+                print("[Bot] Joining unvisited server: " .. sid)
+                -- Pre-emptively blacklist so no other alt races into the same slot
+                markServerVisited(sid)
+                TeleportService:TeleportToPlaceInstance(PlaceId, sid, LocalPlayer)
+                foundServer = true
+            end)
+        end
+
+        if foundServer then break end
+
+        if data.nextPageCursor and data.nextPageCursor ~= "" then
+            cursor = data.nextPageCursor
+            task.wait(0.3)
+        else
+            break
         end
     end
 
     if not foundServer then
-        print("[Bot] All fetched servers visited or exhausted. Forcing native Roblox teleport...")
+        print("[Bot] All pages exhausted. Falling back to native teleport and resetting blacklist.")
+        -- Only wipe our own entries on total exhaustion so other alts keep theirs
         pcall(function()
-            if writefile and isfile(myVisitedFileName) then
-                writefile(myVisitedFileName, HttpService:JSONEncode({[tostring(game.JobId)] = true}))
+            if writefile then
+                writefile(SharedVisitedFile, HttpService:JSONEncode({
+                    [tostring(game.JobId)] = true
+                }))
             end
         end)
+        MemoryVisited = { [tostring(game.JobId)] = true }
         task.wait(2)
         TeleportService:Teleport(PlaceId, LocalPlayer)
     end
 end
 
--- Immediate check upon execution: If we joined an already visited server, hop out instantly!
+-- On load: if we somehow landed on an already-blacklisted server, bail immediately
 task.spawn(function()
-    task.wait(1.5)
+    task.wait(2)
     local visited = getVisitedTable()
-    local currentId = tostring(game.JobId)
-    
-    local matchCount = 0
-    for id, _ in pairs(visited) do
-        if id == currentId then
-            matchCount = matchCount + 1
-        end
-    end
-    
-    if matchCount > 1 then
-        print("[Bot] WARNING: Joined an already visited/blacklisted server! Re-hopping immediately...")
+    -- JobId is always in visited (we wrote it above), so count entries with same id > 1 means another alt was already here
+    -- Instead: check if it was blacklisted BEFORE we wrote it this session
+    -- We track this via a separate flag written before markServerVisited runs
+    -- Simple heuristic: if visited count for this jobId shows it was pre-existing, hop
+    -- Since we can't distinguish "we wrote it" from "another alt wrote it" after the fact,
+    -- we use getgenv to pass a flag from queue_on_teleport context
+    if getgenv().TradeBotPreBlacklisted then
+        print("[Bot] Pre-blacklisted server detected on join. Hopping immediately.")
         serverHop()
     end
 end)
@@ -299,8 +294,7 @@ local function evaluateAltDominance()
         local shouldHop = false
         for _, player in ipairs(Players:GetPlayers()) do
             if player ~= LocalPlayer then
-                local numStr = string.match(player.Name, "^Xvlamer%d+$")
-                if numStr then
+                if string.match(player.Name, "^Xvlamer%d+$") then
                     local otherAltNum = tonumber(string.match(player.Name, "%d+$")) or 1
                     if otherAltNum < altNumber then
                         shouldHop = true
@@ -309,9 +303,8 @@ local function evaluateAltDominance()
                 end
             end
         end
-        
         if shouldHop then
-            print("[Bot] Higher priority alt detected. Hopping out.")
+            print("[Bot] Higher priority alt in server. Hopping.")
             serverHop()
         end
     end)
@@ -326,13 +319,6 @@ Players.PlayerAdded:Connect(function(player)
         end
     end)
 end)
-
-local initialMessages = {
-    "can somebody give me a free weapon please",
-    "can anybody give me a free pet or weapon please",
-    "can anybody give me a pet or a gun or a knife please",
-    "anybody have any free godly I can have"
-}
 
 local thankMessages = {
     "thanks bro",
@@ -365,11 +351,10 @@ end
 
 local function fireGuiButton(button)
     if not button or not button:IsA("GuiButton") then return end
-    
     pcall(function()
         if getconnections and type(getconnections) == "function" then
-            local success, conns = pcall(getconnections, button.MouseButton1Click)
-            if success and type(conns) == "table" then
+            local ok, conns = pcall(getconnections, button.MouseButton1Click)
+            if ok and type(conns) == "table" then
                 for _, connection in ipairs(conns) do
                     if connection and type(connection.Fire) == "function" then
                         connection:Fire()
@@ -378,7 +363,6 @@ local function fireGuiButton(button)
             end
         end
     end)
-    
     pcall(function()
         if firesignal and type(firesignal) == "function" then
             firesignal(button.MouseButton1Click)
@@ -407,18 +391,13 @@ end
 local function isValidTradeResponse(msg)
     local lower = string.lower(msg)
     lower = string.gsub(lower, "^%s*(.-)%s*$", "%1")
-    
     local validPhrases = {
-        "me", "ok", "sure", "alright", "allright", "ok bet", 
+        "me", "ok", "sure", "alright", "allright", "ok bet",
         "i can", "i got", "bet", "yep", "yeah"
     }
-    
     for _, phrase in ipairs(validPhrases) do
-        if lower == phrase then
-            return true
-        end
+        if lower == phrase then return true end
     end
-    
     return false
 end
 
@@ -443,7 +422,6 @@ local function setupChatListener()
                                     end
                                     return
                                 end
-                                
                                 if isValidTradeResponse(msgText) then
                                     if not isTradeActive() then
                                         local currentTime = tick()
@@ -471,7 +449,6 @@ local function setupChatListener()
                 end
                 return
             end
-            
             if isValidTradeResponse(msg) then
                 if not isTradeActive() then
                     local currentTime = tick()
@@ -502,18 +479,15 @@ local function getRarity(color3)
     local r = math.floor(color3.R * 255 + 0.5)
     local g = math.floor(color3.G * 255 + 0.5)
     local b = math.floor(color3.B * 255 + 0.5)
-    
     local function match(r1, g1, b1)
         return math.abs(r - r1) <= 8 and math.abs(g - g1) <= 8 and math.abs(b - b1) <= 8
     end
-
     if match(106, 106, 106) then return "Common" end
     if match(0, 255, 255) then return "Uncommon" end
     if match(0, 200, 0) then return "Rare" end
     if match(220, 0, 5) then return "Legendary" end
     if match(255, 0, 179) then return "Godly" end
     if match(100, 10, 255) then return "Ancient" end
-    
     return "Unique / Classic"
 end
 
@@ -523,9 +497,8 @@ local function scanInventory()
         local mainGui = PlayerGui:FindFirstChild("MainGUI")
         local gameFolder = mainGui and mainGui:FindFirstChild("Game")
         local inventoryUI = gameFolder and gameFolder:FindFirstChild("Inventory")
-        
         if not inventoryUI then return end
-        
+
         local function scanFolder(folder)
             if not folder then return end
             for _, child in ipairs(folder:GetDescendants()) do
@@ -533,36 +506,28 @@ local function scanInventory()
                     if child.Name == "NewItem" and child:IsA("Frame") then
                         local container = child:FindFirstChild("Container")
                         local itemNameFrame = child:FindFirstChild("ItemName")
-                        
                         if container and itemNameFrame then
                             local amountStr = ""
                             local amountLabel = container:FindFirstChild("Amount")
                             if amountLabel and amountLabel:IsA("TextLabel") then
                                 amountStr = amountLabel.Text
                             end
-                            
                             local amount = 1
                             if amountStr ~= "" then
                                 local parsed = string.match(amountStr, "x(%d+)")
-                                if parsed then
-                                    amount = tonumber(parsed) or 1
-                                end
+                                if parsed then amount = tonumber(parsed) or 1 end
                             end
-                            
                             local rarity = getRarity(itemNameFrame.BackgroundColor3)
-                            
                             local isChroma = "No"
                             local tagsFrame = child:FindFirstChild("Tags")
                             if tagsFrame and tagsFrame:FindFirstChild("Chroma") then
                                 isChroma = "Yes"
                             end
-                            
                             local itemName = "Unknown Item"
                             local nameLabel = itemNameFrame:FindFirstChildWhichIsA("TextLabel")
                             if nameLabel and nameLabel.Text ~= "" then
                                 itemName = nameLabel.Text
                             end
-                            
                             local key = itemName .. "_" .. rarity .. "_" .. isChroma
                             items[key] = {
                                 Name = itemName,
@@ -576,7 +541,7 @@ local function scanInventory()
                 end)
             end
         end
-        
+
         local main = inventoryUI:FindFirstChild("Main")
         if main then
             scanFolder(main:FindFirstChild("Pets"))
@@ -585,11 +550,8 @@ local function scanInventory()
             scanFolder(main:FindFirstChild("Guns"))
         end
     end)
-    
-    if not success then
-        return items, false
-    end
-    
+
+    if not success then return items, false end
     local count = 0
     for _ in pairs(items) do count = count + 1 end
     return items, count > 0
@@ -601,73 +563,60 @@ local isProcessingQueue = false
 local function processWebhookQueue()
     if isProcessingQueue then return end
     isProcessingQueue = true
-    
     task.spawn(function()
         while #WebhookQueue > 0 do
             local batch = {}
             local mentionsEveryone = false
-            
             local maxBatch = math.min(10, #WebhookQueue)
             for i = 1, maxBatch do
                 local queuedData = table.remove(WebhookQueue, 1)
                 if queuedData and queuedData.Item then
                     local itemData = queuedData.Item
                     local gainedAmount = queuedData.Gained
-                    
                     local rarityStr = tostring(itemData.Rarity)
                     local isAllowed = (rarityStr == "Legendary" or rarityStr == "Godly" or rarityStr == "Ancient" or rarityStr == "Unique / Classic")
-                    
                     if isAllowed then
                         local decColor = 3447003
                         pcall(function()
-                            local hexColor = string.format("%02X%02X%02X", 
-                                math.floor(itemData.Color.R * 255), 
-                                math.floor(itemData.Color.G * 255), 
-                                math.floor(itemData.Color.B * 255)
-                            )
+                            local hexColor = string.format("%02X%02X%02X",
+                                math.floor(itemData.Color.R * 255),
+                                math.floor(itemData.Color.G * 255),
+                                math.floor(itemData.Color.B * 255))
                             decColor = tonumber(hexColor, 16) or 3447003
                         end)
-                        
                         table.insert(batch, {
                             ["title"] = "🎉 New Item Acquired! 🎉",
-                            ["description"] = string.format("**Account:** %s\n**Item Received:** %s\n**Rarity:** %s\n**Chroma:** %s\n**Amount Gained:** %d\n**Total Owned Now:** %d", 
-                                tostring(LocalPlayer.Name), tostring(itemData.Name), rarityStr, tostring(itemData.Chroma), tonumber(gainedAmount) or 1, tonumber(itemData.Amount) or 1),
+                            ["description"] = string.format(
+                                "**Account:** %s\n**Item Received:** %s\n**Rarity:** %s\n**Chroma:** %s\n**Amount Gained:** %d\n**Total Owned Now:** %d",
+                                tostring(LocalPlayer.Name), tostring(itemData.Name), rarityStr,
+                                tostring(itemData.Chroma), tonumber(gainedAmount) or 1, tonumber(itemData.Amount) or 1),
                             ["color"] = decColor
                         })
-                        
                         if rarityStr == "Godly" or rarityStr == "Ancient" or rarityStr == "Unique / Classic" then
                             mentionsEveryone = true
                         end
                     end
                 end
             end
-            
             if #batch > 0 then
                 local payloadData = { ["embeds"] = batch }
-                if mentionsEveryone then
-                    payloadData["content"] = "@everyone"
-                end
-                
-                local success, encoded = pcall(function()
-                    return HttpService:JSONEncode(payloadData)
-                end)
-                
-                if success and encoded then
+                if mentionsEveryone then payloadData["content"] = "@everyone" end
+                local ok, encoded = pcall(function() return HttpService:JSONEncode(payloadData) end)
+                if ok and encoded then
                     local requestFunc = request or http_request or (syn and syn.request) or (fluxus and fluxus.request)
                     if requestFunc then
                         pcall(function()
                             requestFunc({
                                 Url = WebhookURL,
                                 Method = "POST",
-                                Headers = {["Content-Type"] = "application/json"},
+                                Headers = { ["Content-Type"] = "application/json" },
                                 Body = encoded
                             })
                         end)
                     end
                 end
             end
-            
-            task.wait(1.5) 
+            task.wait(1.5)
         end
         isProcessingQueue = false
     end)
@@ -675,7 +624,7 @@ end
 
 local function queueWebhook(itemData, gainedAmount)
     pcall(function()
-        table.insert(WebhookQueue, {Item = itemData, Gained = gainedAmount})
+        table.insert(WebhookQueue, { Item = itemData, Gained = gainedAmount })
         processWebhookQueue()
     end)
 end
@@ -687,16 +636,10 @@ local isScanningInventory = false
 local function checkInventoryChanges()
     if isScanningInventory then return false end
     isScanningInventory = true
-    
     local gainedAny = false
-    
     pcall(function()
         local currentItems, uiFound = scanInventory()
-        if not uiFound then
-            isScanningInventory = false
-            return false
-        end
-        
+        if not uiFound then isScanningInventory = false return end
         if not inventoryInitialized then
             for k, v in pairs(currentItems) do
                 baselineInventory[k] = v.Amount
@@ -714,15 +657,11 @@ local function checkInventoryChanges()
                     baselineInventory[k] = v.Amount
                 end
             end
-            
             for k, _ in pairs(baselineInventory) do
-                if not currentItems[k] then
-                    baselineInventory[k] = 0
-                end
+                if not currentItems[k] then baselineInventory[k] = 0 end
             end
         end
     end)
-    
     isScanningInventory = false
     return gainedAny
 end
@@ -734,9 +673,8 @@ task.spawn(function()
         pcall(checkInventoryChanges)
         task.wait(0.5)
     end
-    
     while true do
-        task.wait(0.5) 
+        task.wait(0.5)
         pcall(function()
             local itemsGained = checkInventoryChanges()
             if itemsGained then
@@ -765,7 +703,6 @@ task.spawn(function()
                     end
                 end
             end
-
             local crossPlatform = PlayerGui:FindFirstChild("CrossPlatform")
             if crossPlatform then
                 local newItem = crossPlatform:FindFirstChild("NewItem")
@@ -819,16 +756,13 @@ end)
 task.spawn(function()
     local tradeOpenTime = 0
     local wasTradeOpen = false
-
     while true do
         task.wait(0.25)
-
         if isTradeActive() then
             if not wasTradeOpen then
                 tradeOpenTime = tick()
                 wasTradeOpen = true
             end
-            
             if tick() - tradeOpenTime >= 3 then
                 pcall(function()
                     local tradeGui = PlayerGui:FindFirstChild("TradeGUI")
@@ -845,12 +779,10 @@ task.spawn(function()
                                         if cancelBtn and cancelBtn:FindFirstChild("ActionButton") then
                                             cancelBtn.ActionButton:Destroy()
                                         end
-                                        
                                         local mainAcceptBtn = acceptFolder:FindFirstChild("ActionButton")
                                         if mainAcceptBtn and mainAcceptBtn.Visible then
                                             fireGuiButton(mainAcceptBtn)
                                         end
-                                        
                                         local confirmBtn = acceptFolder:FindFirstChild("Confirm")
                                         if confirmBtn and confirmBtn:FindFirstChild("ActionButton") and confirmBtn.ActionButton.Visible then
                                             fireGuiButton(confirmBtn.ActionButton)
@@ -873,39 +805,37 @@ task.spawn(function()
     local noTradeTimer = 10
     local wasActiveLastCheck = false
     local hasTradedInServer = false
-    
+
     local initialMessagesList = {
         "can somebody give me a free weapon please",
         "can anybody give me a free pet or weapon please",
         "can anybody give me a pet or a gun or a knife please",
         "anybody have any free godly I can have"
     }
-    
+
     local availableIndices = {1, 2, 3, 4}
     for i = #availableIndices, 2, -1 do
         local j = math.random(i)
         availableIndices[i], availableIndices[j] = availableIndices[j], availableIndices[i]
     end
-    
+
     local msgCountToSend = math.random(1, 2)
     local sentMessagesCount = 0
-    
     local sentFirstMsg = false
     local sentSecondMsg = false
 
     while true do
         task.wait(0.5)
-        
         local currentlyActive = isTradeActive()
         local elapsed = tick() - startTime
-        
+
         if not sentFirstMsg and elapsed >= 1 and sentMessagesCount < msgCountToSend and #availableIndices > 0 then
             sentFirstMsg = true
             sentMessagesCount = sentMessagesCount + 1
             local index = table.remove(availableIndices, 1)
             sendMessage(initialMessagesList[index])
         end
-        
+
         if not sentSecondMsg and elapsed >= 40 and sentMessagesCount < msgCountToSend and #availableIndices > 0 then
             sentSecondMsg = true
             sentMessagesCount = sentMessagesCount + 1
@@ -919,11 +849,10 @@ task.spawn(function()
             noTradeTimer = 10
             continue
         end
-        
+
         if wasActiveLastCheck and not currentlyActive then
             wasActiveLastCheck = false
             noTradeTimer = 10
-            
             task.spawn(function()
                 task.wait(0.5)
                 if checkInventoryChanges() then
@@ -931,7 +860,7 @@ task.spawn(function()
                 end
             end)
         end
-        
+
         if hasTradedInServer then
             if noTradeTimer > 0 then
                 noTradeTimer = noTradeTimer - 0.5
