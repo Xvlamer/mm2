@@ -214,14 +214,14 @@ local messages = {
     "can anybody give me a free pet or weapon please",
     "can anybody give me a pet or a gun or a knife please",
     "can someone give me a cool weapon please",
-    "anybody have any free items i can have"
+    "anybody have any free items i can have",
+    "Can anybody give me a free godly please"
 }
 
 local thankMessages = {
-    "thanks bro",
-    "yo tysm",
-    "tysm man",
-    "yoo thanks bro"
+    "tysm!",
+    "omg thanks",
+    "thank you"
 }
 
 local function sendMessage(msg)
@@ -315,6 +315,7 @@ local function setupChatListener()
                     general.MessageReceived:Connect(function(textChatMessage)
                         if textChatMessage.SourcePlayer and textChatMessage.SourcePlayer ~= LocalPlayer then
                             local msgText = textChatMessage.Text
+                            
                             if checkDangerWords(msgText) then
                                 if not isTradeActive() then
                                     serverHop()
@@ -709,7 +710,7 @@ local function handleTradeSession()
         local itemsGained = checkInventoryChanges()
         
         if itemsGained then
-            task.wait(1)
+            task.wait(2)
             local randMsg = thankMessages[math.random(1, #thankMessages)]
             sendMessage(randMsg)
         end
