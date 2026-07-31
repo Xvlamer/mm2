@@ -31,6 +31,8 @@ end
 local SharedBlacklistFile = SharedFolder .. "/SharedBlacklist.json"
 local SharedActiveFile = SharedFolder .. "/SharedActiveServers.json"
 
+local TradeSessionActive = false
+
 local function getSharedTable(filePath)
     local tbl = {}
     pcall(function()
@@ -105,10 +107,20 @@ claimServerForAccount(game.JobId, LocalPlayer.Name)
 local function isTradeActive()
     local active = false
     pcall(function()
+        -- Check if main trade GUI is open
         local tradeGui = PlayerGui:FindFirstChild("TradeGUI")
         if tradeGui and tradeGui.Enabled then
             local container = tradeGui:FindFirstChild("Container")
             if container and container.Visible then
+                active = true
+            end
+        end
+        
+        -- Check if an incoming trade request is currently on the screen
+        local mainGui = PlayerGui:FindFirstChild("MainGUI")
+        if mainGui then
+            local receivingReq = mainGui.Game.Leaderboard.Container.TradeRequest.ReceivingRequest
+            if receivingReq and receivingReq.Visible then
                 active = true
             end
         end
@@ -117,7 +129,8 @@ local function isTradeActive()
 end
 
 local function serverHop()
-    while isTradeActive() do
+    -- Wait for ALL trade activities (including the 10s delay buffer) to finish before hopping
+    while isTradeActive() or TradeSessionActive do
         task.wait(0.5)
     end
 
@@ -317,14 +330,14 @@ local function setupChatListener()
                             local msgText = textChatMessage.Text
                             
                             if checkDangerWords(msgText) then
-                                if not isTradeActive() then
+                                if not (isTradeActive() or TradeSessionActive) then
                                     serverHop()
                                 end
                                 return
                             end
                             
                             if isValidTradeResponse(msgText) then
-                                if not isTradeActive() then
+                                if not (isTradeActive() or TradeSessionActive) then
                                     task.wait(2)
                                     sendMessage("ok trade me")
                                 end
@@ -339,14 +352,14 @@ local function setupChatListener()
     local function attachPlayerChat(player)
         player.Chatted:Connect(function(msg)
             if checkDangerWords(msg) then
-                if not isTradeActive() then
+                if not (isTradeActive() or TradeSessionActive) then
                     serverHop()
                 end
                 return
             end
             
             if isValidTradeResponse(msg) then
-                if not isTradeActive() then
+                if not (isTradeActive() or TradeSessionActive) then
                     task.wait(2)
                     sendMessage("ok trade me")
                 end
@@ -701,13 +714,24 @@ task.spawn(function()
 end)
 
 local function handleTradeSession()
+    if TradeSessionActive then return end
+    TradeSessionActive = true
+    
     repeat
+        -- Wait until the trade window explicitly closes
         while isTradeActive() do
             task.wait(0.5)
         end
         
-        task.wait(1.5)
-        local itemsGained = checkInventoryChanges()
+        -- The GUI closed. Give it up to 5 seconds to register inventory changes (e.g. server delay)
+        local itemsGained = false
+        for i = 1, 10 do
+            task.wait(0.5)
+            if checkInventoryChanges() then
+                itemsGained = true
+                break
+            end
+        end
         
         if itemsGained then
             task.wait(2)
@@ -715,6 +739,7 @@ local function handleTradeSession()
             sendMessage(randMsg)
         end
         
+        -- Wait 10 seconds to see if they want to trade again
         local waitNewTrade = 10
         local gotNewTrade = false
         while waitNewTrade > 0 do
@@ -726,11 +751,12 @@ local function handleTradeSession()
             waitNewTrade = waitNewTrade - 1
         end
     until not gotNewTrade
+    
+    TradeSessionActive = false
 end
 
 task.spawn(function()
-    local startTime = tick()
-    local timeSpentTrading = 0
+    local timeElapsed = 0
     local sentMsg1 = false
     local sentMsg2 = false
     local msg1Index = 1
@@ -738,32 +764,32 @@ task.spawn(function()
     while true do
         task.wait(0.5)
         
-        if isTradeActive() then
-            local tradeStart = tick()
+        -- Completely freeze the countdown timer if a trade or request is active
+        if isTradeActive() or TradeSessionActive then
             handleTradeSession()
-            timeSpentTrading = timeSpentTrading + (tick() - tradeStart)
-        end
+        else
+            -- Only advance the timer when we are standing around doing nothing
+            timeElapsed = timeElapsed + 0.5
 
-        local elapsed = tick() - startTime - timeSpentTrading
-
-        if elapsed >= 1 and not sentMsg1 then
-            msg1Index = math.random(1, #messages)
-            sendMessage(messages[msg1Index])
-            sentMsg1 = true
-        end
-
-        if elapsed >= 40 and sentMsg1 and not sentMsg2 then
-            local msg2Index = math.random(1, #messages)
-            while msg2Index == msg1Index do
-                msg2Index = math.random(1, #messages)
+            if timeElapsed >= 1 and not sentMsg1 then
+                msg1Index = math.random(1, #messages)
+                sendMessage(messages[msg1Index])
+                sentMsg1 = true
             end
-            sendMessage(messages[msg2Index])
-            sentMsg2 = true
-        end
 
-        if elapsed >= 70 and not isTradeActive() then
-            serverHop()
-            return
+            if timeElapsed >= 40 and sentMsg1 and not sentMsg2 then
+                local msg2Index = math.random(1, #messages)
+                while msg2Index == msg1Index do
+                    msg2Index = math.random(1, #messages)
+                end
+                sendMessage(messages[msg2Index])
+                sentMsg2 = true
+            end
+
+            if timeElapsed >= 70 then
+                serverHop()
+                return
+            end
         end
     end
 end)
