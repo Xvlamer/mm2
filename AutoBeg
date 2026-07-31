@@ -126,24 +126,7 @@ local function saveSharedTable(filePath, tbl)
     ensureSharedStorage()
     pcall(function()
         if writefile then
-            local cleanedTbl = {}
-            local currentTime = os.time()
-            
-            for k, v in pairs(tbl) do
-                if type(v) == "table" and v.time then
-                    if currentTime - v.time < 86400 then
-                        cleanedTbl[tostring(k)] = v
-                    end
-                elseif type(v) == "number" then
-                    if currentTime - v < 86400 then
-                        cleanedTbl[tostring(k)] = v
-                    end
-                else
-                    cleanedTbl[tostring(k)] = v
-                end
-            end
-            
-            writefile(filePath, HttpService:JSONEncode(cleanedTbl))
+            writefile(filePath, HttpService:JSONEncode(tbl))
         end
     end)
 end
@@ -181,30 +164,23 @@ local function isServerBlocked(jobId)
     
     local blocked = false
     pcall(function()
-        local currentTime = os.time()
-        
         local blacklist = getSharedTable(SharedBlacklistFile)
         if blacklist[strId] then
-            if currentTime - blacklist[strId] < 86400 then
-                blocked = true
-                MemoryBlacklist[strId] = true
-                return
-            end
+            blocked = true
+            MemoryBlacklist[strId] = true
+            return
         end
         
         local active = getSharedTable(SharedActiveFile)
         if active[strId] then
-            if (currentTime - (active[strId].time or 0)) < 3600 then
-                blocked = true
-                MemoryBlacklist[strId] = true
-                return
-            end
+            blocked = true
+            MemoryBlacklist[strId] = true
+            return
         end
     end)
     return blocked
 end
 
--- Immediately blacklist current JobId on startup before anything else can execute twice
 addServerToSharedBlacklist(game.JobId)
 claimServerForAccount(game.JobId, LocalPlayer.Name)
 
