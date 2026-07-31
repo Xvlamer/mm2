@@ -1,7 +1,6 @@
-if getgenv().TradeBotExecuted == game.JobId then
-    return
+if not game:IsLoaded() then
+    game.Loaded:Wait()
 end
-getgenv().TradeBotExecuted = game.JobId
 
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
@@ -12,6 +11,8 @@ local TextChatService = game:GetService("TextChatService")
 local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 local PlaceId = 142823291
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+math.randomseed(os.time() + tick() + (LocalPlayer.UserId or 0))
 
 local altNumber = 1
 pcall(function()
@@ -38,9 +39,11 @@ local function getSharedTable(filePath)
     pcall(function()
         if isfile and isfile(filePath) then
             local content = readfile(filePath)
-            local decoded = HttpService:JSONDecode(content)
-            if type(decoded) == "table" then
-                tbl = decoded
+            if content and content ~= "" then
+                local decoded = HttpService:JSONDecode(content)
+                if type(decoded) == "table" then
+                    tbl = decoded
+                end
             end
         end
     end)
@@ -58,6 +61,7 @@ end
 local function addServerToSharedBlacklist(jobId)
     if not jobId or jobId == "" then return end
     pcall(function()
+        -- Always read the freshest data to prevent bot accounts from overwriting each other's files
         local blacklist = getSharedTable(SharedBlacklistFile)
         blacklist[tostring(jobId)] = os.time()
         saveSharedTable(SharedBlacklistFile, blacklist)
@@ -137,9 +141,10 @@ local function serverHop()
     
     local targetServerId = nil
     local cursor = ""
+    local validServers = {}
     
     for page = 1, 10 do
-        local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Asc&limit=100"
+        local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Desc&limit=100"
         if cursor ~= "" then
             url = url .. "&cursor=" .. cursor
         end
@@ -151,14 +156,13 @@ local function serverHop()
                 for _, server in ipairs(decodedData.data) do
                     if type(server) == "table" and server.maxPlayers and server.playing then
                         local serverIdStr = tostring(server.id)
-                        if server.playing < server.maxPlayers and not isServerBlocked(serverIdStr) then
-                            targetServerId = serverIdStr
-                            break
+                        if server.playing < server.maxPlayers and server.playing > 2 and not isServerBlocked(serverIdStr) then
+                            table.insert(validServers, serverIdStr)
                         end
                     end
                 end
                 
-                if targetServerId then
+                if #validServers >= 15 then
                     break
                 end
                 
@@ -175,7 +179,9 @@ local function serverHop()
         task.wait(0.15)
     end
     
-    if targetServerId then
+    if #validServers > 0 then
+        -- Randomize selection so all bot instances don't target the exact same server simultaneously
+        targetServerId = validServers[math.random(1, #validServers)]
         claimServerForAccount(targetServerId, LocalPlayer.Name)
         pcall(function()
             TeleportService:TeleportToPlaceInstance(PlaceId, targetServerId, LocalPlayer)
@@ -607,24 +613,6 @@ task.spawn(function()
         task.wait(0.08)
         pcall(function()
             checkInventoryChanges()
-        end)
-    end
-end)
-
-task.spawn(function()
-    while true do
-        task.wait(0.1)
-        pcall(function()
-            local joinGui = PlayerGui:FindFirstChild("Join")
-            if joinGui then
-                local friendsFrame = joinGui:FindFirstChild("Friends")
-                if friendsFrame then
-                    local playBtn = friendsFrame:FindFirstChild("Play")
-                    if playBtn and playBtn:IsA("GuiButton") and playBtn.Visible then
-                        fireGuiButton(playBtn)
-                    end
-                end
-            end
         end)
     end
 end)
