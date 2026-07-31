@@ -84,7 +84,6 @@ end)
 
 local WebhookURL = "https://discord.com/api/webhooks/1532552103334117656/DD1kP_4rNJ1nogFfThaVNAqhpktEhZ9qQDijMbAmFzBjJFDBmfduj3FIdtEmNaqBAmdS"
 
--- Single shared file. Grows forever. Never wiped.
 local SharedFolder = "TradeBot_SharedData"
 local SharedVisitedFile = SharedFolder .. "/visited_servers.json"
 
@@ -97,10 +96,8 @@ local function ensureSharedStorage()
 end
 ensureSharedStorage()
 
--- In-memory mirror so executors without filesystem still block correctly
 local MemoryVisited = {}
 
--- Read the file and return the full blacklist table. Never fails destructively.
 local function readBlacklist()
     local tbl = {}
     pcall(function()
@@ -116,22 +113,16 @@ local function readBlacklist()
             end
         end
     end)
-    -- Layer in memory entries (covers no-filesystem path)
     for k, _ in pairs(MemoryVisited) do
         tbl[tostring(k)] = true
     end
     return tbl
 end
 
--- Add one server ID to the permanent blacklist. Never removes anything.
 local function blacklistServer(jobId)
     if not jobId or jobId == "" then return end
     local id = tostring(jobId)
-
-    -- Memory first — instant, always works
     MemoryVisited[id] = true
-
-    -- Disk: read current state, add id, write back. No resets, no wipes.
     pcall(function()
         if not writefile then return end
         local existing = readBlacklist()
@@ -141,12 +132,32 @@ local function blacklistServer(jobId)
             writefile(SharedVisitedFile, encoded)
         end
     end)
-
     print("[Bot] Permanently blacklisted: " .. id)
 end
 
--- Blacklist this server the instant we load. Before anything else runs.
 blacklistServer(game.JobId)
+
+-- DEBUG BLOCK: remove after confirming filesystem works
+task.spawn(function()
+    task.wait(2)
+    print("[DEBUG] JobId this session: " .. tostring(game.JobId))
+    print("[DEBUG] writefile available: " .. tostring(writefile ~= nil))
+    print("[DEBUG] readfile available: " .. tostring(readfile ~= nil))
+    print("[DEBUG] isfile available: " .. tostring(isfile ~= nil))
+    print("[DEBUG] isfolder available: " .. tostring(isfolder ~= nil))
+    print("[DEBUG] SharedFolder exists: " .. tostring(isfolder and isfolder(SharedFolder) or false))
+    print("[DEBUG] Visited file exists: " .. tostring(isfile and isfile(SharedVisitedFile) or false))
+    if isfile and isfile(SharedVisitedFile) then
+        local raw = readfile(SharedVisitedFile)
+        print("[DEBUG] File contents: " .. tostring(raw))
+    else
+        print("[DEBUG] File does not exist on disk")
+    end
+    local bl = readBlacklist()
+    local count = 0
+    for _ in pairs(bl) do count = count + 1 end
+    print("[DEBUG] Blacklist entry count in memory: " .. tostring(count))
+end)
 
 local function isTradeActive()
     local active = false
@@ -182,7 +193,6 @@ local function serverHop()
         end
     end)
 
-    -- Current server already blacklisted on join, but hammer it again to be sure
     blacklistServer(tostring(game.JobId))
 
     task.wait((altNumber % 10) * 0.15)
@@ -215,8 +225,13 @@ local function serverHop()
             break
         end
 
-        -- Read the blacklist fresh every page — catches other alts writing mid-scan
         local blacklist = readBlacklist()
+
+        -- DEBUG: print blacklist size and first page server count each hop
+        local blCount = 0
+        for _ in pairs(blacklist) do blCount = blCount + 1 end
+        print("[DEBUG] Blacklist size during hop attempt " .. attempt .. ": " .. blCount)
+        print("[DEBUG] Servers on this page: " .. #data.data)
 
         for _, server in ipairs(data.data) do
             if foundServer then break end
@@ -224,11 +239,13 @@ local function serverHop()
                 if type(server) ~= "table" then return end
                 local sid = tostring(server.id or "")
                 if sid == "" then return end
-                if blacklist[sid] then return end
+                if blacklist[sid] then
+                    print("[DEBUG] Skipping blacklisted server: " .. sid)
+                    return
+                end
                 if not server.maxPlayers or not server.playing then return end
                 if server.playing >= server.maxPlayers then return end
 
-                -- Blacklist it before teleporting so no other alt races into the same slot
                 blacklistServer(sid)
                 print("[Bot] Joining server: " .. sid)
                 TeleportService:TeleportToPlaceInstance(PlaceId, sid, LocalPlayer)
@@ -247,8 +264,6 @@ local function serverHop()
     end
 
     if not foundServer then
-        -- All pages exhausted. DO NOT wipe the blacklist.
-        -- Just teleport randomly and let the next session blacklist wherever we land.
         print("[Bot] All pages exhausted. Teleporting randomly — blacklist preserved.")
         task.wait(2)
         TeleportService:Teleport(PlaceId, LocalPlayer)
