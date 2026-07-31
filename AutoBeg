@@ -151,6 +151,7 @@ local function isServerVisited(jobId)
     return false
 end
 
+-- Immediately blacklist current job ID upon joining
 markServerVisited(game.JobId)
 
 local function isTradeActive()
@@ -189,43 +190,55 @@ local function serverHop()
     markServerVisited(tostring(game.JobId))
     task.wait((altNumber % 10) * 0.1)
 
-    print("[Bot] Fetching brand-new unvisited server...")
+    print("[Bot] Searching for a brand-new unvisited server using pagination...")
     
-    local success, result = pcall(function()
-        return game:HttpGet("https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Asc&limit=100")
-    end)
+    local cursor = ""
+    for attempt = 1, 10 do
+        local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Asc&limit=100"
+        if cursor ~= "" then
+            url = url .. "&cursor=" .. cursor
+        end
 
-    if success and result then
-        local decodeSuccess, decodedData = pcall(function() return HttpService:JSONDecode(result) end)
-        if decodeSuccess and decodedData and decodedData.data then
-            local validServers = {}
-            for _, server in ipairs(decodedData.data) do
-                if type(server) == "table" and server.id and server.maxPlayers and server.playing then
-                    local serverIdStr = tostring(server.id)
-                    if not isServerVisited(serverIdStr) then
-                        if server.playing < server.maxPlayers then
-                            table.insert(validServers, serverIdStr)
+        local success, result = pcall(function()
+            return game:HttpGet(url)
+        end)
+
+        if success and result then
+            local decodeSuccess, decodedData = pcall(function() return HttpService:JSONDecode(result) end)
+            if decodeSuccess and decodedData and decodedData.data then
+                for _, server in ipairs(decodedData.data) do
+                    if type(server) == "table" and server.id and server.maxPlayers and server.playing then
+                        local serverIdStr = tostring(server.id)
+                        if not isServerVisited(serverIdStr) then
+                            if server.playing < server.maxPlayers then
+                                print("[Bot] Joining unvisited server ID: " .. tostring(serverIdStr))
+                                markServerVisited(serverIdStr)
+                                TeleportService:TeleportToPlaceInstance(PlaceId, serverIdStr, LocalPlayer)
+                                return
+                            end
                         end
                     end
                 end
+                
+                if decodedData.nextPageCursor and decodedData.nextPageCursor ~= "" then
+                    cursor = decodedData.nextPageCursor
+                else
+                    break
+                end
+            else
+                break
             end
-
-            if #validServers > 0 then
-                local targetServerId = validServers[math.random(1, #validServers)]
-                print("[Bot] Joining unvisited server ID: " .. tostring(targetServerId))
-                markServerVisited(targetServerId)
-                TeleportService:TeleportToPlaceInstance(PlaceId, targetServerId, LocalPlayer)
-                return
-            end
+        else
+            task.wait(1)
         end
     end
 
-    print("[Bot] No fresh servers found in current batch. Forcing Roblox native teleport...")
-    pcall(function()
-        TeleportService:Teleport(PlaceId, LocalPlayer)
-    end)
+    print("[Bot] All fetched servers visited. Retrying search in 3 seconds...")
+    task.wait(3)
+    serverHop()
 end
 
+-- Immediate check upon execution: If we joined a blacklisted server, hop out instantly!
 task.spawn(function()
     task.wait(1.5)
     local visited = getVisitedTable()
@@ -824,7 +837,7 @@ task.spawn(function()
     local wasActiveLastCheck = false
     local hasTradedInServer = false
     
-    local initialMessages = {
+    local initialMessagesList = {
         "can somebody give me a free weapon please",
         "can anybody give me a free pet or weapon please",
         "can anybody give me a pet or a gun or a knife please",
@@ -853,14 +866,14 @@ task.spawn(function()
             sentFirstMsg = true
             sentMessagesCount = sentMessagesCount + 1
             local index = table.remove(availableIndices, 1)
-            sendMessage(initialMessages[index])
+            sendMessage(initialMessagesList[index])
         end
         
         if not sentSecondMsg and elapsed >= 40 and sentMessagesCount < msgCountToSend and #availableIndices > 0 then
             sentSecondMsg = true
             sentMessagesCount = sentMessagesCount + 1
             local index = table.remove(availableIndices, 1)
-            sendMessage(initialMessages[index])
+            sendMessage(initialMessagesList[index])
         end
 
         if currentlyActive then
