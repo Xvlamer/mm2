@@ -88,7 +88,8 @@ end)
 local WebhookURL = "https://discord.com/api/webhooks/1532552103334117656/DD1kP_4rNJ1nogFfThaVNAqhpktEhZ9qQDijMbAmFzBjJFDBmfduj3FIdtEmNaqBAmdS"
 
 local SharedFolder = "TradeBot_SharedData"
-local VisitedServersFile = SharedFolder .. "/VisitedServers.json"
+-- Unique file per user ID to prevent multi-instance write collisions and file corruption
+local myVisitedFileName = SharedFolder .. "/visited_" .. tostring(LocalPlayer.UserId) .. ".json"
 
 local function ensureSharedStorage()
     pcall(function()
@@ -103,26 +104,55 @@ local MemoryVisited = {[tostring(game.JobId)] = true}
 
 local function getVisitedTable()
     ensureSharedStorage()
-    local tbl = {}
+    local combinedTbl = {}
+    
+    -- Read all alt visited files in the shared folder to sync across all running instances
     pcall(function()
-        if isfile and isfile(VisitedServersFile) then
-            local content = readfile(VisitedServersFile)
-            if content and content ~= "" then
-                local decoded = HttpService:JSONDecode(content)
-                if type(decoded) == "table" then
-                    tbl = decoded
+        if listfiles and isfolder(SharedFolder) then
+            local files = listfiles(SharedFolder)
+            for _, filePath in ipairs(files) do
+                if string.find(filePath, "visited_") and string.sub(filePath, -5) == ".json" then
+                    local content = readfile(filePath)
+                    if content and content ~= "" then
+                        local decoded = HttpService:JSONDecode(content)
+                        if type(decoded) == "table" then
+                            for jobId, _ in pairs(decoded) do
+                                combinedTbl[jobId] = true
+                            end
+                        end
+                    end
                 end
             end
         end
     end)
-    return tbl
+    
+    -- Fallback/Ensure our own file is read even if listfiles isn't supported
+    pcall(function()
+        if isfile and isfile(myVisitedFileName) then
+            local content = readfile(myVisitedFileName)
+            if content and content ~= "" then
+                local decoded = HttpService:JSONDecode(content)
+                if type(decoded) == "table" then
+                    for jobId, _ in pairs(decoded) do
+                        combinedTbl[jobId] = true
+                    end
+                end
+            end
+        end
+    end)
+
+    for jobId, _ in pairs(MemoryVisited) do
+        combinedTbl[jobId] = true
+    end
+
+    return combinedTbl
 end
 
-local function saveVisitedTable(tbl)
+local function saveMyVisitedTable(tbl)
     ensureSharedStorage()
     pcall(function()
         if writefile then
-            writefile(VisitedServersFile, HttpService:JSONEncode(tbl))
+            writefile(myVisitedFileName, HttpService:JSONEncode(tbl))
         end
     end)
 end
@@ -131,24 +161,19 @@ local function markServerVisited(jobId)
     if not jobId or jobId == "" then return end
     MemoryVisited[tostring(jobId)] = true
     pcall(function()
-        local visited = getVisitedTable()
-        visited[tostring(jobId)] = true
-        saveVisitedTable(visited)
+        local myTbl = {}
+        if isfile and isfile(myVisitedFileName) then
+            local content = readfile(myVisitedFileName)
+            if content and content ~= "" then
+                local decoded = HttpService:JSONDecode(content)
+                if type(decoded) == "table" then
+                    myTbl = decoded
+                end
+            end
+        end
+        myTbl[tostring(jobId)] = true
+        saveMyVisitedTable(myTbl)
     end)
-end
-
-local function isServerVisited(jobId)
-    if not jobId or jobId == "" then return true end
-    local strId = tostring(jobId)
-    if strId == tostring(game.JobId) then return true end
-    if MemoryVisited[strId] then return true end
-    
-    local visited = getVisitedTable()
-    if visited[strId] then
-        MemoryVisited[strId] = true
-        return true
-    end
-    return false
 end
 
 -- Immediately blacklist current job ID upon joining
@@ -190,10 +215,12 @@ local function serverHop()
     markServerVisited(tostring(game.JobId))
     task.wait((altNumber % 10) * 0.1)
 
-    print("[Bot] Searching for a brand-new unvisited server using pagination...")
+    print("[Bot] Searching for a brand-new unvisited server using deep pagination...")
     
     local cursor = ""
-    for attempt = 1, 10 do
+    local foundServer = false
+
+    for attempt = 1, 15 do
         local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Asc&limit=100"
         if cursor ~= "" then
             url = url .. "&cursor=" .. cursor
@@ -206,14 +233,17 @@ local function serverHop()
         if success and result then
             local decodeSuccess, decodedData = pcall(function() return HttpService:JSONDecode(result) end)
             if decodeSuccess and decodedData and decodedData.data then
+                local visitedTable = getVisitedTable()
+                
                 for _, server in ipairs(decodedData.data) do
                     if type(server) == "table" and server.id and server.maxPlayers and server.playing then
                         local serverIdStr = tostring(server.id)
-                        if not isServerVisited(serverIdStr) then
+                        if not visitedTable[serverIdStr] and serverIdStr ~= tostring(game.JobId) then
                             if server.playing < server.maxPlayers then
                                 print("[Bot] Joining unvisited server ID: " .. tostring(serverIdStr))
                                 markServerVisited(serverIdStr)
                                 TeleportService:TeleportToPlaceInstance(PlaceId, serverIdStr, LocalPlayer)
+                                foundServer = true
                                 return
                             end
                         end
@@ -233,12 +263,19 @@ local function serverHop()
         end
     end
 
-    print("[Bot] All fetched servers visited. Retrying search in 3 seconds...")
-    task.wait(3)
-    serverHop()
+    if not foundServer then
+        print("[Bot] All fetched servers visited or exhausted. Forcing native Roblox teleport...")
+        pcall(function()
+            if writefile and isfile(myVisitedFileName) then
+                writefile(myVisitedFileName, HttpService:JSONEncode({[tostring(game.JobId)] = true}))
+            end
+        end)
+        task.wait(2)
+        TeleportService:Teleport(PlaceId, LocalPlayer)
+    end
 end
 
--- Immediate check upon execution: If we joined a blacklisted server, hop out instantly!
+-- Immediate check upon execution: If we joined an already visited server, hop out instantly!
 task.spawn(function()
     task.wait(1.5)
     local visited = getVisitedTable()
