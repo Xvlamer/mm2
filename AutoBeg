@@ -588,6 +588,7 @@ end
 local baselineInventory = {}
 local inventoryInitialized = false
 local isScanningInventory = false
+local hasThankedThisTrade = false
 
 local function checkInventoryChanges()
     if isScanningInventory then return false end
@@ -622,8 +623,6 @@ local function checkInventoryChanges()
     return gainedAny
 end
 
-local itemsGainedThisTrade = false
-
 task.spawn(function()
     while not inventoryInitialized do
         pcall(checkInventoryChanges)
@@ -633,8 +632,8 @@ task.spawn(function()
         task.wait(0.5)
         pcall(function()
             local itemsGained = checkInventoryChanges()
-            if itemsGained then
-                itemsGainedThisTrade = true
+            if itemsGained and not hasThankedThisTrade then
+                hasThankedThisTrade = true
                 task.spawn(function()
                     task.wait(2)
                     local randMsg = thankMessages[math.random(1, #thankMessages)]
@@ -752,6 +751,7 @@ task.spawn(function()
             end
         else
             wasTradeOpen = false
+            hasThankedThisTrade = false
         end
     end
 end)
