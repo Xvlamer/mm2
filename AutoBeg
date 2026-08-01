@@ -27,25 +27,29 @@ pcall(function()
     end
 end)
 
-pcall(function()
-    local executorFilePath = "autoexec/TradeBot_AutoLoader.lua"
-    local scriptContent = string.format([[
+local function getAutoExecCode()
+    return string.format([[
+        if not game:IsLoaded() then
+            game.Loaded:Wait()
+        end
         task.spawn(function()
-            task.wait(3)
+            task.wait(2)
             pcall(function()
                 loadstring(game:HttpGet("%s", true))()
             end)
         end)
     ]], RawScriptURL)
+end
+
+pcall(function()
+    local executorFilePath = "autoexec/TradeBot_AutoLoader.lua"
     if writefile then
-        if not isfile or not isfile(executorFilePath) then
-            pcall(function()
-                if not isfolder("autoexec") then
-                    makefolder("autoexec")
-                end
-            end)
-            writefile(executorFilePath, scriptContent)
-        end
+        pcall(function()
+            if not isfolder("autoexec") then
+                makefolder("autoexec")
+            end
+        end)
+        writefile(executorFilePath, getAutoExecCode())
     end
 end)
 
@@ -54,16 +58,15 @@ pcall(function()
         queue_on_teleport(string.format([[
             if not getgenv().TradeBotQueued then
                 getgenv().TradeBotQueued = true
-                task.spawn(function()
-                    task.wait(3)
-                    pcall(function()
-                        loadstring(game:HttpGet("%s", true))()
-                    end)
-                end)
+                %s
             end
-        ]], RawScriptURL))
+        ]], getAutoExecCode()))
     end
 end)
+
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
 
 local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 local PlaceId = 142823291
@@ -87,16 +90,11 @@ local WebhookURL = "https://discord.com/api/webhooks/1532552103334117656/DD1kP_4
 local SharedFolder = "TradeBot_SharedData"
 local SharedVisitedFile = SharedFolder .. "/visited_servers.json"
 
-local function ensureSharedStorage()
-    pcall(function()
-        if makefolder and not isfolder(SharedFolder) then
-            makefolder(SharedFolder)
-        end
-    end)
-end
-ensureSharedStorage()
-
-local MemoryVisited = {}
+pcall(function()
+    if makefolder and not isfolder(SharedFolder) then
+        makefolder(SharedFolder)
+    end
+end)
 
 local function readBlacklist()
     local tbl = {}
@@ -113,16 +111,12 @@ local function readBlacklist()
             end
         end
     end)
-    for k, _ in pairs(MemoryVisited) do
-        tbl[tostring(k)] = true
-    end
     return tbl
 end
 
 local function blacklistServer(jobId)
     if not jobId or jobId == "" then return end
     local id = tostring(jobId)
-    MemoryVisited[id] = true
     pcall(function()
         if not writefile then return end
         local existing = readBlacklist()
@@ -154,7 +148,7 @@ local function serverHop()
     while isTradeActive() do 
         task.wait(1) 
     end
-    task.wait(1.5)
+    task.wait(1)
     if isTradeActive() then 
         getgenv().IsHopping = false 
         return 
@@ -172,67 +166,76 @@ local function serverHop()
             queue_on_teleport(string.format([[
                 if not getgenv().TradeBotQueued then
                     getgenv().TradeBotQueued = true
-                    task.spawn(function()
-                        task.wait(3)
-                        pcall(function()
-                            loadstring(game:HttpGet("%s", true))()
-                        end)
-                    end)
+                    %s
                 end
-            ]], RawScriptURL))
+            ]], getAutoExecCode()))
         end
     end)
 
     local targetServer = nil
     local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
     
-    pcall(function()
-        local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
-        local responseText = nil
-        
-        if req then
-            local success, res = pcall(req, {Url = url, Method = "GET"})
-            if success and res and res.StatusCode == 200 then
-                responseText = res.Body
+    local proxyFetched = false
+    
+    task.spawn(function()
+        pcall(function()
+            local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
+            local responseText = nil
+            
+            if req then
+                local success, res = pcall(req, {Url = url, Method = "GET"})
+                if success and res and res.StatusCode == 200 then
+                    responseText = res.Body
+                end
             end
-        end
-        
-        if not responseText then
-            local success, res = pcall(function() return game:HttpGet(url) end)
-            if success and res then
-                responseText = res
+            
+            if not responseText then
+                local success, res = pcall(function() return game:HttpGet(url) end)
+                if success and res then
+                    responseText = res
+                end
             end
-        end
-        
-        if responseText then
-            local success, data = pcall(HttpService.JSONDecode, HttpService, responseText)
-            if success and data and data.data then
-                local available = {}
-                local blacklist = readBlacklist()
-                for _, srv in ipairs(data.data) do
-                    if type(srv) == "table" and srv.id and srv.id ~= tostring(game.JobId) and not blacklist[srv.id] then
-                        if srv.playing and srv.maxPlayers and srv.playing < srv.maxPlayers then
-                            table.insert(available, srv.id)
+            
+            if responseText then
+                local success, data = pcall(HttpService.JSONDecode, HttpService, responseText)
+                if success and data and data.data then
+                    local available = {}
+                    local blacklist = readBlacklist()
+                    for _, srv in ipairs(data.data) do
+                        if type(srv) == "table" and srv.id and srv.id ~= tostring(game.JobId) and not blacklist[srv.id] then
+                            if srv.playing and srv.maxPlayers and srv.playing < srv.maxPlayers then
+                                table.insert(available, srv.id)
+                            end
                         end
                     end
-                end
-                
-                if #available > 0 then
-                    targetServer = available[math.random(1, #available)]
+                    
+                    if #available > 0 then
+                        targetServer = available[math.random(1, #available)]
+                    end
                 end
             end
-        end
+            proxyFetched = true
+        end)
     end)
-    
+
+    local waitTimeout = tick()
+    while not proxyFetched and tick() - waitTimeout < 4 do
+        task.wait(0.2)
+    end
+
     if not targetServer then
-        MemoryVisited = {}
         pcall(function()
             if writefile then 
                 writefile(SharedVisitedFile, HttpService:JSONEncode({[tostring(game.JobId)] = true})) 
             end
         end)
         
-        TeleportService:Teleport(PlaceId, LocalPlayer)
+        task.spawn(function()
+            while true do
+                pcall(function() TeleportService:Teleport(PlaceId, LocalPlayer) end)
+                task.wait(3)
+            end
+        end)
         return
     end
     
@@ -240,10 +243,8 @@ local function serverHop()
     
     task.spawn(function()
         while true do
-            pcall(function()
-                TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
-            end)
-            task.wait(4)
+            pcall(function() TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer) end)
+            task.wait(3)
         end
     end)
 end
@@ -751,16 +752,12 @@ task.spawn(function()
             end
         else
             wasTradeOpen = false
-            hasThankedThisTrade = false
         end
     end
 end)
 
 task.spawn(function()
     local startTime = tick()
-    local noTradeTimer = 10
-    local hasTradedInServer = false
-
     local initialMessagesList = {
         "can somebody give me a free weapon please",
         "can anybody give me a free pet or weapon please",
@@ -780,14 +777,8 @@ task.spawn(function()
     local sentSecondMsg = false
 
     while true do
-        task.wait(0.5)
-        if getgenv().IsHopping then return end
-
-        if isTradeActive() then
-            hasTradedInServer = true
-            noTradeTimer = 10
-            continue
-        end
+        task.wait(1)
+        if getgenv().IsHopping or isTradeActive() then break end
 
         local elapsed = tick() - startTime
 
@@ -804,19 +795,41 @@ task.spawn(function()
             local index = table.remove(availableIndices, 1)
             sendMessage(initialMessagesList[index])
         end
+    end
+end)
 
-        if hasTradedInServer then
-            if noTradeTimer > 0 then
-                noTradeTimer = noTradeTimer - 0.5
-                if noTradeTimer <= 0 then
+task.spawn(function()
+    local joinTime = tick()
+    local tradeEndedTime = 0
+    local hasTradedInServer = false
+    local wasTrading = false
+
+    while true do
+        task.wait(0.5)
+        if getgenv().IsHopping then return end
+
+        local tradingNow = isTradeActive()
+        
+        if tradingNow then
+            hasTradedInServer = true
+            wasTrading = true
+        else
+            if wasTrading then
+                wasTrading = false
+                tradeEndedTime = tick()
+                hasThankedThisTrade = false
+            end
+
+            if hasTradedInServer then
+                if tick() - tradeEndedTime >= 10 then
                     serverHop()
                     return
                 end
-            end
-        else
-            if elapsed >= 70 then
-                serverHop()
-                return
+            else
+                if tick() - joinTime >= 70 then
+                    serverHop()
+                    return
+                end
             end
         end
     end
