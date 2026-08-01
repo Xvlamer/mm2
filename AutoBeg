@@ -132,28 +132,17 @@ local function blacklistServer(jobId)
             writefile(SharedVisitedFile, encoded)
         end
     end)
-    print("[Bot] Blacklisted: " + id)
+    print("[Bot] Blacklisted: " .. id)
 end
 
 blacklistServer(game.JobId)
 
--- Stricter and more robust TradeGUI visibility check
 local function isTradeActive()
     local active = false
     pcall(function()
         local tradeGui = PlayerGui:FindFirstChild("TradeGUI")
-        if tradeGui then
-            if tradeGui.Enabled then
-                active = true
-            end
-            for _, desc in ipairs(tradeGui:GetDescendants()) do
-                if desc:IsA("GuiObject") and desc.Visible and desc.AbsoluteSize.Magnitude > 5 then
-                    if desc.Name == "Trade" or desc.Name == "Container" or desc.Name == "Accept" or desc.Name == "Background" then
-                        active = true
-                        break
-                    end
-                end
-            end
+        if tradeGui and tradeGui.Enabled then
+            active = true
         end
     end)
     return active
@@ -161,15 +150,6 @@ end
 
 local function serverHop()
     print("[Bot] Server hop triggered...")
-
-    -- Strict pre-hop verification: Re-check trade activity multiple times to prevent leaving while TradeGUI is visible
-    for i = 1, 10 do
-        if isTradeActive() then
-            print("[Bot] Trade GUI is active/visible! Aborting server hop.")
-            return
-        end
-        task.wait(0.2)
-    end
 
     while isTradeActive() do
         task.wait(0.2)
@@ -821,7 +801,6 @@ task.spawn(function()
     while true do
         task.wait(0.5)
 
-        -- Strict guard: If TradeGUI is active/visible, never trigger timeouts or hops
         if isTradeActive() then
             hasTradedInServer = true
             wasActiveLastCheck = true
