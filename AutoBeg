@@ -150,13 +150,10 @@ end
 local function serverHop()
     if getgenv().IsHopping then return end
     getgenv().IsHopping = true
-    print("[Bot] Server hop triggered...")
 
-    -- Wait out active trades strictly
     while isTradeActive() do 
         task.wait(1) 
     end
-    -- Buffer to ensure UI isn't just flickering
     task.wait(1.5)
     if isTradeActive() then 
         getgenv().IsHopping = false 
@@ -186,18 +183,11 @@ local function serverHop()
         end
     end)
 
-    print("[Bot] Locating new server...")
-    local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
-    local blacklist = readBlacklist()
     local targetServer = nil
-    local cursor = ""
+    local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
     
-    for attempt = 1, 5 do
-        local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
-        if cursor ~= "" then
-            url = url .. "&cursor=" .. HttpService:UrlEncode(cursor)
-        end
-        
+    pcall(function()
+        local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
         local responseText = nil
         
         if req then
@@ -218,6 +208,7 @@ local function serverHop()
             local success, data = pcall(HttpService.JSONDecode, HttpService, responseText)
             if success and data and data.data then
                 local available = {}
+                local blacklist = readBlacklist()
                 for _, srv in ipairs(data.data) do
                     if type(srv) == "table" and srv.id and srv.id ~= tostring(game.JobId) and not blacklist[srv.id] then
                         if srv.playing and srv.maxPlayers and srv.playing < srv.maxPlayers then
@@ -228,18 +219,12 @@ local function serverHop()
                 
                 if #available > 0 then
                     targetServer = available[math.random(1, #available)]
-                    break
                 end
-                
-                cursor = data.nextPageCursor or ""
-                if cursor == "" then break end
             end
         end
-        task.wait(0.5)
-    end
+    end)
     
     if not targetServer then
-        print("[Bot] Failed to find unvisited server. Forcing jump.")
         MemoryVisited = {}
         pcall(function()
             if writefile then 
@@ -251,7 +236,6 @@ local function serverHop()
         return
     end
     
-    print("[Bot] Teleporting to: " .. targetServer)
     blacklistServer(targetServer)
     
     task.spawn(function()
@@ -279,7 +263,6 @@ local function evaluateAltDominance()
             end
         end
         if shouldHop then
-            print("[Bot] Higher priority alt in server. Hopping.")
             serverHop()
         end
     end)
@@ -392,7 +375,6 @@ local function setupChatListener()
                                 local msgText = textChatMessage.Text
                                 if checkDangerWords(msgText) then
                                     if not isTradeActive() then
-                                        print("[Bot] Danger word detected. Hopping...")
                                         serverHop()
                                     end
                                     return
@@ -419,7 +401,6 @@ local function setupChatListener()
         player.Chatted:Connect(function(msg)
             if checkDangerWords(msg) then
                 if not isTradeActive() then
-                    print("[Bot] Danger word detected via legacy chat. Hopping...")
                     serverHop()
                 end
                 return
@@ -777,7 +758,7 @@ end)
 
 task.spawn(function()
     local startTime = tick()
-    local noTradeTimer = 15
+    local noTradeTimer = 10
     local hasTradedInServer = false
 
     local initialMessagesList = {
@@ -804,7 +785,7 @@ task.spawn(function()
 
         if isTradeActive() then
             hasTradedInServer = true
-            noTradeTimer = 15
+            noTradeTimer = 10
             continue
         end
 
@@ -817,7 +798,7 @@ task.spawn(function()
             sendMessage(initialMessagesList[index])
         end
 
-        if not sentSecondMsg and elapsed >= 30 and sentMessagesCount < msgCountToSend and #availableIndices > 0 then
+        if not sentSecondMsg and elapsed >= 40 and sentMessagesCount < msgCountToSend and #availableIndices > 0 then
             sentSecondMsg = true
             sentMessagesCount = sentMessagesCount + 1
             local index = table.remove(availableIndices, 1)
@@ -828,14 +809,12 @@ task.spawn(function()
             if noTradeTimer > 0 then
                 noTradeTimer = noTradeTimer - 0.5
                 if noTradeTimer <= 0 then
-                    print("[Bot] Trade timer expired. Commencing hop.")
                     serverHop()
                     return
                 end
             end
         else
-            if elapsed >= 60 then
-                print("[Bot] Server time expired without trade. Commencing hop.")
+            if elapsed >= 70 then
                 serverHop()
                 return
             end
