@@ -143,6 +143,12 @@ end
 
 local function serverHop()
     if getgenv().IsHopping then return end
+    
+    -- Absolute guard: never hop if a trade is currently open
+    if isTradeActive() then 
+        return 
+    end
+
     getgenv().IsHopping = true
 
     while isTradeActive() do 
@@ -416,8 +422,8 @@ local function setupChatListener()
                     end
                 end
             end
-        end)
-    end
+        end
+    end)
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer then
@@ -800,37 +806,20 @@ end)
 
 task.spawn(function()
     local joinTime = tick()
-    local tradeEndedTime = 0
-    local hasTradedInServer = false
-    local wasTrading = false
 
     while true do
         task.wait(0.5)
         if getgenv().IsHopping then return end
 
-        local tradingNow = isTradeActive()
-        
-        if tradingNow then
-            hasTradedInServer = true
-            wasTrading = true
-        else
-            if wasTrading then
-                wasTrading = false
-                tradeEndedTime = tick()
-                hasThankedThisTrade = false
-            end
+        -- If a trade is active right now, do absolute nothing and skip ticking timer loops
+        if isTradeActive() then
+            continue
+        end
 
-            if hasTradedInServer then
-                if tick() - tradeEndedTime >= 10 then
-                    serverHop()
-                    return
-                end
-            else
-                if tick() - joinTime >= 70 then
-                    serverHop()
-                    return
-                end
-            end
+        -- If no trade has happened and 70 seconds have passed, hop servers
+        if tick() - joinTime >= 70 then
+            serverHop()
+            return
         end
     end
 end)
