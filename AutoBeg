@@ -132,32 +132,10 @@ local function blacklistServer(jobId)
             writefile(SharedVisitedFile, encoded)
         end
     end)
-    print("[Bot] Permanently blacklisted: " .. id)
+    print("[Bot] Blacklisted: " .. id)
 end
 
 blacklistServer(game.JobId)
-
--- DEBUG BLOCK: remove after confirming filesystem works
-task.spawn(function()
-    task.wait(2)
-    print("[DEBUG] JobId this session: " .. tostring(game.JobId))
-    print("[DEBUG] writefile available: " .. tostring(writefile ~= nil))
-    print("[DEBUG] readfile available: " .. tostring(readfile ~= nil))
-    print("[DEBUG] isfile available: " .. tostring(isfile ~= nil))
-    print("[DEBUG] isfolder available: " .. tostring(isfolder ~= nil))
-    print("[DEBUG] SharedFolder exists: " .. tostring(isfolder and isfolder(SharedFolder) or false))
-    print("[DEBUG] Visited file exists: " .. tostring(isfile and isfile(SharedVisitedFile) or false))
-    if isfile and isfile(SharedVisitedFile) then
-        local raw = readfile(SharedVisitedFile)
-        print("[DEBUG] File contents: " .. tostring(raw))
-    else
-        print("[DEBUG] File does not exist on disk")
-    end
-    local bl = readBlacklist()
-    local count = 0
-    for _ in pairs(bl) do count = count + 1 end
-    print("[DEBUG] Blacklist entry count in memory: " .. tostring(count))
-end)
 
 local function isTradeActive()
     local active = false
@@ -195,16 +173,18 @@ local function serverHop()
 
     blacklistServer(tostring(game.JobId))
 
-    task.wait((altNumber % 10) * 0.15)
+    local staggerDelay = (altNumber - 1) * 2
+    if staggerDelay > 0 then
+        print("[Bot] Alt " .. altNumber .. " staggering " .. staggerDelay .. "s...")
+        task.wait(staggerDelay)
+    end
 
     print("[Bot] Scanning for unvisited server...")
 
+    local candidates = {}
     local cursor = ""
-    local foundServer = false
 
     for attempt = 1, 20 do
-        if foundServer then break end
-
         local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId)
             .. "/servers/Public?sortOrder=Asc&limit=100"
         if cursor ~= "" then
@@ -227,33 +207,22 @@ local function serverHop()
 
         local blacklist = readBlacklist()
 
-        -- DEBUG: print blacklist size and first page server count each hop
-        local blCount = 0
-        for _ in pairs(blacklist) do blCount = blCount + 1 end
-        print("[DEBUG] Blacklist size during hop attempt " .. attempt .. ": " .. blCount)
-        print("[DEBUG] Servers on this page: " .. #data.data)
-
         for _, server in ipairs(data.data) do
-            if foundServer then break end
             pcall(function()
                 if type(server) ~= "table" then return end
                 local sid = tostring(server.id or "")
                 if sid == "" then return end
-                if blacklist[sid] then
-                    print("[DEBUG] Skipping blacklisted server: " .. sid)
-                    return
-                end
+                if blacklist[sid] then return end
+                if sid == tostring(game.JobId) then return end
                 if not server.maxPlayers or not server.playing then return end
                 if server.playing >= server.maxPlayers then return end
-
-                blacklistServer(sid)
-                print("[Bot] Joining server: " .. sid)
-                TeleportService:TeleportToPlaceInstance(PlaceId, sid, LocalPlayer)
-                foundServer = true
+                table.insert(candidates, sid)
             end)
         end
 
-        if foundServer then break end
+        if #candidates >= 10 then
+            break
+        end
 
         if data.nextPageCursor and data.nextPageCursor ~= "" then
             cursor = data.nextPageCursor
@@ -263,11 +232,35 @@ local function serverHop()
         end
     end
 
-    if not foundServer then
-        print("[Bot] All pages exhausted. Teleporting randomly — blacklist preserved.")
+    if #candidates == 0 then
+        print("[Bot] No unvisited servers found. Random teleport — blacklist preserved.")
         task.wait(2)
         TeleportService:Teleport(PlaceId, LocalPlayer)
+        return
     end
+
+    for i = #candidates, 2, -1 do
+        local j = math.random(i)
+        candidates[i], candidates[j] = candidates[j], candidates[i]
+    end
+
+    local pickIndex = math.random(math.ceil(#candidates / 2), #candidates)
+    local target = candidates[pickIndex]
+
+    local finalCheck = readBlacklist()
+    if finalCheck[target] then
+        for _, sid in ipairs(candidates) do
+            if not finalCheck[sid] then
+                target = sid
+                break
+            end
+        end
+    end
+
+    blacklistServer(target)
+    print("[Bot] Teleporting to: " .. target)
+    task.wait(0.1)
+    TeleportService:TeleportToPlaceInstance(PlaceId, target, LocalPlayer)
 end
 
 local function evaluateAltDominance()
