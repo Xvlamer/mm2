@@ -149,11 +149,100 @@ local function isTradeActive()
 end
 
 local function serverHop()
+    if getgenv().IsHopping then return end
+    getgenv().IsHopping = true
     print("[Bot] Server hop triggered...")
 
-    while isTradeActive() do
-        task.wait(0.2)
+    -- Wait out active trades with flicker protection
+    while true do
+        if isTradeActive() then
+            task.wait(0.5)
+        else
+            task.wait(1.5) -- Wait to see if UI just flickered during trade processing
+            if not isTradeActive() then
+                break
+            end
+        end
     end
+
+    blacklistServer(tostring(game.JobId))
+
+    local staggerDelay = (altNumber - 1) * 2
+    if staggerDelay > 0 then
+        print("[Bot] Alt " .. altNumber .. " staggering " .. staggerDelay .. "s...")
+        task.wait(staggerDelay)
+    end
+
+    print("[Bot] Scanning for unvisited server...")
+
+    local candidates = {}
+    local cursor = ""
+    
+    while #candidates == 0 do
+        for attempt = 1, 20 do
+            -- Fetch highest populated servers first
+            local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Desc&limit=100"
+            if cursor ~= "" then
+                url = url .. "&cursor=" .. HttpService:UrlEncode(cursor)
+            end
+
+            local ok, result = pcall(function() return game:HttpGet(url) end)
+            if not ok or not result then
+                task.wait(1)
+                continue
+            end
+
+            local decodeOk, data = pcall(HttpService.JSONDecode, HttpService, result)
+            if not decodeOk or not data or not data.data then break end
+
+            local blacklist = readBlacklist()
+
+            for _, server in ipairs(data.data) do
+                pcall(function()
+                    if type(server) ~= "table" then return end
+                    local sid = tostring(server.id or "")
+                    if sid == "" or sid == tostring(game.JobId) then return end
+                    if blacklist[sid] then return end
+                    if not server.maxPlayers or not server.playing then return end
+                    if server.playing >= server.maxPlayers then return end
+                    
+                    table.insert(candidates, sid)
+                end)
+            end
+
+            if #candidates >= 10 then break end
+
+            if data.nextPageCursor and data.nextPageCursor ~= "" then
+                cursor = data.nextPageCursor
+                task.wait(0.3)
+            else
+                break
+            end
+        end
+        
+        if #candidates == 0 then
+            print("[Bot] Blacklist exhausted. Wiping history to find new servers.")
+            MemoryVisited = {}
+            pcall(function()
+                if writefile then
+                    local resetList = {[tostring(game.JobId)] = true}
+                    writefile(SharedVisitedFile, HttpService:JSONEncode(resetList))
+                end
+            end)
+            cursor = ""
+            task.wait(1)
+        end
+    end
+
+    for i = #candidates, 2, -1 do
+        local j = math.random(i)
+        candidates[i], candidates[j] = candidates[j], candidates[i]
+    end
+
+    local target = candidates[math.random(1, math.min(5, #candidates))]
+    blacklistServer(target)
+    
+    print("[Bot] Teleporting to new server: " .. target)
 
     pcall(function()
         if queue_on_teleport then
@@ -170,97 +259,16 @@ local function serverHop()
             ]], RawScriptURL))
         end
     end)
-
-    blacklistServer(tostring(game.JobId))
-
-    local staggerDelay = (altNumber - 1) * 2
-    if staggerDelay > 0 then
-        print("[Bot] Alt " .. altNumber .. " staggering " .. staggerDelay .. "s...")
-        task.wait(staggerDelay)
-    end
-
-    print("[Bot] Scanning for unvisited server...")
-
-    local candidates = {}
-    local cursor = ""
-
-    for attempt = 1, 20 do
-        local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId)
-            .. "/servers/Public?sortOrder=Asc&limit=100"
-        if cursor ~= "" then
-            url = url .. "&cursor=" .. HttpService:UrlEncode(cursor)
-        end
-
-        local ok, result = pcall(function()
-            return game:HttpGet(url)
-        end)
-
-        if not ok or not result then
-            task.wait(1)
-            continue
-        end
-
-        local decodeOk, data = pcall(HttpService.JSONDecode, HttpService, result)
-        if not decodeOk or not data or not data.data then
-            break
-        end
-
-        local blacklist = readBlacklist()
-
-        for _, server in ipairs(data.data) do
+    
+    -- Keep trying to teleport until successful
+    task.spawn(function()
+        while true do
             pcall(function()
-                if type(server) ~= "table" then return end
-                local sid = tostring(server.id or "")
-                if sid == "" then return end
-                if blacklist[sid] then return end
-                if sid == tostring(game.JobId) then return end
-                if not server.maxPlayers or not server.playing then return end
-                if server.playing >= server.maxPlayers then return end
-                table.insert(candidates, sid)
+                TeleportService:TeleportToPlaceInstance(PlaceId, target, LocalPlayer)
             end)
+            task.wait(5)
         end
-
-        if #candidates >= 10 then
-            break
-        end
-
-        if data.nextPageCursor and data.nextPageCursor ~= "" then
-            cursor = data.nextPageCursor
-            task.wait(0.3)
-        else
-            break
-        end
-    end
-
-    if #candidates == 0 then
-        print("[Bot] No unvisited servers found. Random teleport — blacklist preserved.")
-        task.wait(2)
-        TeleportService:Teleport(PlaceId, LocalPlayer)
-        return
-    end
-
-    for i = #candidates, 2, -1 do
-        local j = math.random(i)
-        candidates[i], candidates[j] = candidates[j], candidates[i]
-    end
-
-    local pickIndex = math.random(math.ceil(#candidates / 2), #candidates)
-    local target = candidates[pickIndex]
-
-    local finalCheck = readBlacklist()
-    if finalCheck[target] then
-        for _, sid in ipairs(candidates) do
-            if not finalCheck[sid] then
-                target = sid
-                break
-            end
-        end
-    end
-
-    blacklistServer(target)
-    print("[Bot] Teleporting to: " .. target)
-    task.wait(0.1)
-    TeleportService:TeleportToPlaceInstance(PlaceId, target, LocalPlayer)
+    end)
 end
 
 local function evaluateAltDominance()
@@ -776,8 +784,7 @@ end)
 
 task.spawn(function()
     local startTime = tick()
-    local noTradeTimer = 10
-    local wasActiveLastCheck = false
+    local noTradeTimer = 15
     local hasTradedInServer = false
 
     local initialMessagesList = {
@@ -800,15 +807,14 @@ task.spawn(function()
 
     while true do
         task.wait(0.5)
+        if getgenv().IsHopping then return end
 
         if isTradeActive() then
             hasTradedInServer = true
-            wasActiveLastCheck = true
-            noTradeTimer = 10
+            noTradeTimer = 15
             continue
         end
 
-        local currentlyActive = isTradeActive()
         local elapsed = tick() - startTime
 
         if not sentFirstMsg and elapsed >= 1 and sentMessagesCount < msgCountToSend and #availableIndices > 0 then
@@ -823,24 +829,6 @@ task.spawn(function()
             sentMessagesCount = sentMessagesCount + 1
             local index = table.remove(availableIndices, 1)
             sendMessage(initialMessagesList[index])
-        end
-
-        if currentlyActive then
-            hasTradedInServer = true
-            wasActiveLastCheck = true
-            noTradeTimer = 10
-            continue
-        end
-
-        if wasActiveLastCheck and not currentlyActive then
-            wasActiveLastCheck = false
-            noTradeTimer = 10
-            task.spawn(function()
-                task.wait(0.5)
-                if checkInventoryChanges() then
-                    itemsGainedThisTrade = true
-                end
-            end)
         end
 
         if hasTradedInServer then
