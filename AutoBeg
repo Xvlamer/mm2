@@ -132,7 +132,6 @@ local function blacklistServer(jobId)
             writefile(SharedVisitedFile, encoded)
         end
     end)
-    print("[Bot] Blacklisted: " .. id)
 end
 
 blacklistServer(game.JobId)
@@ -153,105 +152,23 @@ local function serverHop()
     getgenv().IsHopping = true
     print("[Bot] Server hop triggered...")
 
-    -- Wait out active trades with flicker protection
-    while true do
-        if isTradeActive() then
-            task.wait(0.5)
-        else
-            task.wait(1.5) 
-            if not isTradeActive() then
-                break
-            end
-        end
+    -- Wait out active trades strictly
+    while isTradeActive() do 
+        task.wait(1) 
     end
+    -- Buffer to ensure UI isn't just flickering
+    task.wait(1.5)
+    if isTradeActive() then 
+        getgenv().IsHopping = false 
+        return 
+    end 
 
     blacklistServer(tostring(game.JobId))
 
     local staggerDelay = (altNumber - 1) * 2
     if staggerDelay > 0 then
-        print("[Bot] Alt " .. altNumber .. " staggering " .. staggerDelay .. "s...")
         task.wait(staggerDelay)
     end
-
-    print("[Bot] Scanning for unvisited server...")
-
-    local candidates = {}
-    
-    while #candidates == 0 do
-        local cursor = ""
-        local hasMorePages = true
-        local pagesScanned = 0
-
-        while hasMorePages and pagesScanned < 30 do
-            pagesScanned = pagesScanned + 1
-            
-            -- excludeFullGames=true stops it from scraping thousands of 12/12 servers
-            local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
-            if cursor ~= "" then
-                url = url .. "&cursor=" .. HttpService:UrlEncode(cursor)
-            end
-
-            local ok, result = pcall(function() return game:HttpGet(url) end)
-            if not ok or not result then
-                print("[Bot] Proxy fetch failed. Retrying...")
-                task.wait(2)
-                continue
-            end
-
-            local decodeOk, data = pcall(HttpService.JSONDecode, HttpService, result)
-            if not decodeOk or not data or not data.data then 
-                task.wait(2)
-                continue 
-            end
-
-            local blacklist = readBlacklist()
-
-            for _, server in ipairs(data.data) do
-                pcall(function()
-                    if type(server) ~= "table" then return end
-                    local sid = tostring(server.id or "")
-                    if sid == "" or sid == tostring(game.JobId) then return end
-                    if blacklist[sid] then return end
-                    if not server.maxPlayers or not server.playing then return end
-                    if server.playing >= server.maxPlayers then return end
-                    
-                    table.insert(candidates, sid)
-                end)
-            end
-
-            if #candidates >= 10 then break end
-
-            if data.nextPageCursor and data.nextPageCursor ~= "" then
-                cursor = data.nextPageCursor
-                task.wait(0.2)
-            else
-                hasMorePages = false
-            end
-        end
-        
-        if #candidates == 0 then
-            print("[Bot] Blacklist exhausted. Wiping history to find new servers.")
-            MemoryVisited = {}
-            pcall(function()
-                if writefile then
-                    -- Wipe the list, but inject the CURRENT server so we literally never join it
-                    local resetList = {[tostring(game.JobId)] = true}
-                    writefile(SharedVisitedFile, HttpService:JSONEncode(resetList))
-                end
-            end)
-            task.wait(3) -- Prevent console spamming
-        end
-    end
-
-    for i = #candidates, 2, -1 do
-        local j = math.random(i)
-        candidates[i], candidates[j] = candidates[j], candidates[i]
-    end
-
-    local target = candidates[math.random(1, math.min(5, #candidates))]
-    blacklistServer(target)
-    
-    print("[Bot] Teleporting to new server: " .. target)
 
     pcall(function()
         if queue_on_teleport then
@@ -268,13 +185,81 @@ local function serverHop()
             ]], RawScriptURL))
         end
     end)
+
+    print("[Bot] Locating new server...")
+    local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
+    local blacklist = readBlacklist()
+    local targetServer = nil
+    local cursor = ""
+    
+    for attempt = 1, 5 do
+        local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
+        if cursor ~= "" then
+            url = url .. "&cursor=" .. HttpService:UrlEncode(cursor)
+        end
+        
+        local responseText = nil
+        
+        if req then
+            local success, res = pcall(req, {Url = url, Method = "GET"})
+            if success and res and res.StatusCode == 200 then
+                responseText = res.Body
+            end
+        end
+        
+        if not responseText then
+            local success, res = pcall(function() return game:HttpGet(url) end)
+            if success and res then
+                responseText = res
+            end
+        end
+        
+        if responseText then
+            local success, data = pcall(HttpService.JSONDecode, HttpService, responseText)
+            if success and data and data.data then
+                local available = {}
+                for _, srv in ipairs(data.data) do
+                    if type(srv) == "table" and srv.id and srv.id ~= tostring(game.JobId) and not blacklist[srv.id] then
+                        if srv.playing and srv.maxPlayers and srv.playing < srv.maxPlayers then
+                            table.insert(available, srv.id)
+                        end
+                    end
+                end
+                
+                if #available > 0 then
+                    targetServer = available[math.random(1, #available)]
+                    break
+                end
+                
+                cursor = data.nextPageCursor or ""
+                if cursor == "" then break end
+            end
+        end
+        task.wait(0.5)
+    end
+    
+    if not targetServer then
+        print("[Bot] Failed to find unvisited server. Forcing jump.")
+        MemoryVisited = {}
+        pcall(function()
+            if writefile then 
+                writefile(SharedVisitedFile, HttpService:JSONEncode({[tostring(game.JobId)] = true})) 
+            end
+        end)
+        
+        TeleportService:Teleport(PlaceId, LocalPlayer)
+        return
+    end
+    
+    print("[Bot] Teleporting to: " .. targetServer)
+    blacklistServer(targetServer)
     
     task.spawn(function()
         while true do
             pcall(function()
-                TeleportService:TeleportToPlaceInstance(PlaceId, target, LocalPlayer)
+                TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
             end)
-            task.wait(5)
+            task.wait(4)
         end
     end)
 end
@@ -832,7 +817,7 @@ task.spawn(function()
             sendMessage(initialMessagesList[index])
         end
 
-        if not sentSecondMsg and elapsed >= 40 and sentMessagesCount < msgCountToSend and #availableIndices > 0 then
+        if not sentSecondMsg and elapsed >= 30 and sentMessagesCount < msgCountToSend and #availableIndices > 0 then
             sentSecondMsg = true
             sentMessagesCount = sentMessagesCount + 1
             local index = table.remove(availableIndices, 1)
@@ -849,7 +834,7 @@ task.spawn(function()
                 end
             end
         else
-            if elapsed >= 70 then
+            if elapsed >= 60 then
                 print("[Bot] Server time expired without trade. Commencing hop.")
                 serverHop()
                 return
