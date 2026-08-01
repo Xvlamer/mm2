@@ -158,7 +158,7 @@ local function serverHop()
         if isTradeActive() then
             task.wait(0.5)
         else
-            task.wait(1.5) -- Wait to see if UI just flickered during trade processing
+            task.wait(1.5) 
             if not isTradeActive() then
                 break
             end
@@ -176,24 +176,33 @@ local function serverHop()
     print("[Bot] Scanning for unvisited server...")
 
     local candidates = {}
-    local cursor = ""
     
     while #candidates == 0 do
-        for attempt = 1, 20 do
-            -- Fetch highest populated servers first
-            local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Desc&limit=100"
+        local cursor = ""
+        local hasMorePages = true
+        local pagesScanned = 0
+
+        while hasMorePages and pagesScanned < 30 do
+            pagesScanned = pagesScanned + 1
+            
+            -- excludeFullGames=true stops it from scraping thousands of 12/12 servers
+            local url = "https://games.roproxy.com/v1/games/" .. tostring(PlaceId) .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
             if cursor ~= "" then
                 url = url .. "&cursor=" .. HttpService:UrlEncode(cursor)
             end
 
             local ok, result = pcall(function() return game:HttpGet(url) end)
             if not ok or not result then
-                task.wait(1)
+                print("[Bot] Proxy fetch failed. Retrying...")
+                task.wait(2)
                 continue
             end
 
             local decodeOk, data = pcall(HttpService.JSONDecode, HttpService, result)
-            if not decodeOk or not data or not data.data then break end
+            if not decodeOk or not data or not data.data then 
+                task.wait(2)
+                continue 
+            end
 
             local blacklist = readBlacklist()
 
@@ -214,9 +223,9 @@ local function serverHop()
 
             if data.nextPageCursor and data.nextPageCursor ~= "" then
                 cursor = data.nextPageCursor
-                task.wait(0.3)
+                task.wait(0.2)
             else
-                break
+                hasMorePages = false
             end
         end
         
@@ -225,12 +234,12 @@ local function serverHop()
             MemoryVisited = {}
             pcall(function()
                 if writefile then
+                    -- Wipe the list, but inject the CURRENT server so we literally never join it
                     local resetList = {[tostring(game.JobId)] = true}
                     writefile(SharedVisitedFile, HttpService:JSONEncode(resetList))
                 end
             end)
-            cursor = ""
-            task.wait(1)
+            task.wait(3) -- Prevent console spamming
         end
     end
 
@@ -260,7 +269,6 @@ local function serverHop()
         end
     end)
     
-    -- Keep trying to teleport until successful
     task.spawn(function()
         while true do
             pcall(function()
