@@ -1,4 +1,6 @@
 if getgenv().TradeBotExecuted == game.JobId then return end
+
+repeat task.wait(0.1) until game.JobId and game.JobId ~= ""
 getgenv().TradeBotExecuted = game.JobId
 getgenv().IsHopping = false
 
@@ -13,7 +15,6 @@ local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 local PlaceId = 142823291
 local RawScriptURL = "https://raw.githubusercontent.com/Xvlamer/mm2/refs/heads/main/AutoBeg"
 
--- // 1. PROPER FILE SYSTEM & BLACKLIST //
 local FolderName = "TradeBotData"
 local BlacklistFile = FolderName .. "/VisitedServers.json"
 
@@ -54,7 +55,6 @@ end
 
 blacklistServer(game.JobId)
 
--- // 2. AUTO-EXECUTE BYPASS //
 pcall(function()
     if syn and syn.protect_gui then
         local holder = Instance.new("ScreenGui")
@@ -116,7 +116,6 @@ local function isTradeActive()
     return active
 end
 
--- // 3. FIXED SERVER HOPPING //
 local function serverHop()
     if getgenv().IsHopping then return end
     if isTradeActive() then return end
@@ -131,62 +130,59 @@ local function serverHop()
     task.spawn(function()
         local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
         local targetServer = nil
-        local attempts = 0
-        local cursor = ""
 
-        while not targetServer and attempts < 10 do
-            attempts = attempts + 1
+        while not targetServer do
+            local cursor = ""
             local blacklist = getBlacklist()
-            
-            -- Fixed sortOrder=Desc to find actual populated servers, not dead ones
-            local url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
-            if cursor ~= "" then
-                url = url .. "&cursor=" .. cursor
-            end
 
-            local responseText = nil
-            if req then
-                local ok, res = pcall(req, {Url = url, Method = "GET"})
-                if ok and res and res.StatusCode == 200 then responseText = res.Body end
-            end
-            if not responseText then
-                local ok, res = pcall(function() return game:HttpGet(url) end)
-                if ok and res then responseText = res end
-            end
-
-            if responseText then
-                local ok, data = pcall(HttpService.JSONDecode, HttpService, responseText)
-                if ok and data and data.data then
-                    for _, srv in ipairs(data.data) do
-                        if type(srv) == "table"
-                            and srv.id
-                            and tostring(srv.id) ~= tostring(game.JobId)
-                            and not blacklist[tostring(srv.id)]
-                            and srv.playing and srv.maxPlayers
-                            and srv.playing < srv.maxPlayers
-                        then
-                            targetServer = tostring(srv.id)
-                            break
-                        end
-                    end
-                    cursor = data.nextPageCursor or ""
-                    if not targetServer and cursor == "" then break end
+            for _ = 1, 20 do
+                local url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
+                if cursor ~= "" then
+                    url = url .. "&cursor=" .. cursor
                 end
-            end
-            task.wait(1)
-        end
 
-        if targetServer then
-            blacklistServer(targetServer)
-            while true do
-                pcall(function() TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer) end)
-                task.wait(2)
+                local responseText = nil
+                if req then
+                    local ok, res = pcall(req, {Url = url, Method = "GET"})
+                    if ok and res and res.StatusCode == 200 then responseText = res.Body end
+                end
+                if not responseText then
+                    local ok, res = pcall(function() return game:HttpGet(url) end)
+                    if ok and res then responseText = res end
+                end
+
+                if responseText then
+                    local ok, data = pcall(HttpService.JSONDecode, HttpService, responseText)
+                    if ok and data and data.data then
+                        for _, srv in ipairs(data.data) do
+                            if type(srv) == "table"
+                                and srv.id
+                                and tostring(srv.id) ~= tostring(game.JobId)
+                                and not blacklist[tostring(srv.id)]
+                                and srv.playing and srv.maxPlayers
+                                and srv.playing < srv.maxPlayers
+                            then
+                                targetServer = tostring(srv.id)
+                                break
+                            end
+                        end
+                        if targetServer then break end
+                        cursor = data.nextPageCursor or ""
+                        if cursor == "" then break end
+                    end
+                end
+                task.wait(0.5)
             end
-        else
-            while true do
-                pcall(function() TeleportService:Teleport(PlaceId, LocalPlayer) end)
+
+            if not targetServer then
                 task.wait(3)
             end
+        end
+
+        blacklistServer(targetServer)
+        while true do
+            pcall(function() TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer) end)
+            task.wait(2.5)
         end
     end)
 end
@@ -267,7 +263,7 @@ end
 
 local function isValidTradeResponse(msg)
     local lower = string.lower(string.gsub(msg, "^%s*(.-)%s*$", "%1"))
-    local phrases = {"me", "ok", "sure", "alright", "allright", "ok bet", "i can", "i got", "bet", "yep", "yeah"}
+    local phrases = {"me", "ok", "sure", "alright", "allright", "ok bet", "i can", "i got", "bet", "yep", "yeah", "i do"}
     for _, phrase in ipairs(phrases) do
         if lower == phrase then return true end
     end
@@ -501,7 +497,6 @@ task.spawn(function()
     end
 end)
 
--- // 4. FIXED CHAT LOOP //
 task.spawn(function()
     local startTime = os.clock()
     local msgs = {
@@ -516,9 +511,8 @@ task.spawn(function()
 
     while true do
         task.wait(1)
-        if getgenv().IsHopping then break end -- Kills loop only when hopping
+        if getgenv().IsHopping then break end
 
-        -- Pauses begging while trading, but doesn't kill the thread permanently
         if isTradeActive() then
             continue 
         end
@@ -542,7 +536,6 @@ task.spawn(function()
     end
 end)
 
--- // 5. FIXED TIMERS (60s no-trade, 10s post-trade) //
 task.spawn(function()
     local joinTime = os.clock()
     local tradeEndedTime = 0
