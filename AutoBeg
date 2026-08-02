@@ -1,17 +1,36 @@
 if getgenv().TradeBotExecuted == game.JobId then return end
 
+pcall(function()
+    settings().Rendering.QualityLevel = 1
+    settings().Physics.AllowSleep = false
+    if setfpscap then setfpscap(30) end
+    local RunService = game:GetService("RunService")
+    if RunService:IsStudio() == false then
+        pcall(function() RunService:Set3dRenderingEnabled(false) end)
+    end
+end)
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
+
+local VirtualUser = game:GetService("VirtualUser")
+LocalPlayer.Idled:Connect(function()
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new())
+    end)
+end)
+
 repeat task.wait(0.1) until game.JobId and game.JobId ~= ""
 getgenv().TradeBotExecuted = game.JobId
 getgenv().IsHopping = false
 
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
-local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TextChatService = game:GetService("TextChatService")
 local CoreGui = game:GetService("CoreGui")
 
-local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 local PlaceId = 142823291
 local RawScriptURL = "https://raw.githubusercontent.com/Xvlamer/mm2/refs/heads/main/AutoBeg"
 
@@ -132,57 +151,54 @@ local function serverHop()
         local targetServer = nil
 
         while not targetServer do
-            local cursor = ""
             local blacklist = getBlacklist()
+            local url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
 
-            for _ = 1, 20 do
-                local url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
-                if cursor ~= "" then
-                    url = url .. "&cursor=" .. cursor
-                end
-
-                local responseText = nil
+            local responseText = nil
+            pcall(function()
                 if req then
-                    local ok, res = pcall(req, {Url = url, Method = "GET"})
-                    if ok and res and res.StatusCode == 200 then responseText = res.Body end
+                    local res = req({Url = url, Method = "GET"})
+                    if res and res.StatusCode == 200 then responseText = res.Body end
                 end
                 if not responseText then
-                    local ok, res = pcall(function() return game:HttpGet(url) end)
-                    if ok and res then responseText = res end
+                    responseText = game:HttpGet(url)
                 end
+            end)
 
-                if responseText then
-                    local ok, data = pcall(HttpService.JSONDecode, HttpService, responseText)
-                    if ok and data and data.data then
-                        for _, srv in ipairs(data.data) do
-                            if type(srv) == "table"
-                                and srv.id
-                                and tostring(srv.id) ~= tostring(game.JobId)
-                                and not blacklist[tostring(srv.id)]
-                                and srv.playing and srv.maxPlayers
-                                and srv.playing < srv.maxPlayers
-                            then
-                                targetServer = tostring(srv.id)
-                                break
-                            end
+            if responseText then
+                local ok, data = pcall(HttpService.JSONDecode, HttpService, responseText)
+                if ok and data and data.data then
+                    local validServers = {}
+                    
+                    for _, srv in ipairs(data.data) do
+                        if type(srv) == "table" 
+                            and srv.id 
+                            and tostring(srv.id) ~= tostring(game.JobId) 
+                            and not blacklist[tostring(srv.id)] 
+                            and srv.playing 
+                            and srv.maxPlayers 
+                            and srv.playing >= 3 
+                            and srv.playing <= (srv.maxPlayers - 2) 
+                        then
+                            table.insert(validServers, tostring(srv.id))
                         end
-                        if targetServer then break end
-                        cursor = data.nextPageCursor or ""
-                        if cursor == "" then break end
+                    end
+                    
+                    if #validServers > 0 then
+                        targetServer = validServers[math.random(1, #validServers)]
                     end
                 end
-                task.wait(0.5)
             end
-
+            
             if not targetServer then
-                task.wait(3)
+                task.wait(2)
             end
         end
 
         blacklistServer(targetServer)
         while true do
             pcall(function() TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer) end)
-            task.wait(2.5)
+            task.wait(4)
         end
     end)
 end
@@ -281,7 +297,7 @@ local function setupChatListener()
         end
         if isValidTradeResponse(msgText) then
             if not isTradeActive() then
-                local currentTime = os.clock()
+                local currentTime = tick()
                 if currentTime - lastTradeResponseTime >= 10 then
                     lastTradeResponseTime = currentTime
                     task.spawn(function()
@@ -478,10 +494,10 @@ task.spawn(function()
         task.wait(0.2)
         if isTradeActive() then
             if not wasTradeOpen then
-                tradeOpenTime = os.clock()
+                tradeOpenTime = tick()
                 wasTradeOpen = true
             end
-            if os.clock() - tradeOpenTime >= 2.5 then
+            if tick() - tradeOpenTime >= 2.5 then
                 pcall(function()
                     local acceptFolder = PlayerGui:FindFirstChild("TradeGUI") and PlayerGui.TradeGUI:FindFirstChild("Container") and PlayerGui.TradeGUI.Container:FindFirstChild("Trade") and PlayerGui.TradeGUI.Container.Trade:FindFirstChild("Actions") and PlayerGui.TradeGUI.Container.Trade.Actions:FindFirstChild("Accept")
                     if acceptFolder then
@@ -498,7 +514,7 @@ task.spawn(function()
 end)
 
 task.spawn(function()
-    local startTime = os.clock()
+    local startTime = tick()
     local msgs = {
         "can somebody give me a free weapon please",
         "can anybody give me a free pet or weapon please",
@@ -517,7 +533,7 @@ task.spawn(function()
             continue 
         end
 
-        local elapsed = os.clock() - startTime
+        local elapsed = tick() - startTime
 
         if not sentFirst and elapsed >= 1 then
             sentFirst = true
@@ -537,7 +553,7 @@ task.spawn(function()
 end)
 
 task.spawn(function()
-    local joinTime = os.clock()
+    local joinTime = tick()
     local tradeEndedTime = 0
     local hasTradedInServer = false
     local wasTrading = false
@@ -552,19 +568,19 @@ task.spawn(function()
         else
             if wasTrading then
                 wasTrading = false
-                tradeEndedTime = os.clock()
+                tradeEndedTime = tick()
                 hasThankedThisTrade = false
             end
 
             if hasTradedInServer then
-                if os.clock() - tradeEndedTime >= 10 then
+                if tick() - tradeEndedTime >= 10 then
                     serverHop()
-                    return
+                    return 
                 end
             else
-                if os.clock() - joinTime >= 60 then
+                if tick() - joinTime >= 60 then
                     serverHop()
-                    return
+                    return 
                 end
             end
         end
