@@ -1,5 +1,6 @@
-if getgenv().TradeBotExecuted == game.JobId or getgenv().TradeBotLock == game.JobId then return end
-getgenv().TradeBotLock = game.JobId
+getgenv().TradeBotLastExec = getgenv().TradeBotLastExec or 0
+if tick() - getgenv().TradeBotLastExec < 5 then return end
+getgenv().TradeBotLastExec = tick()
 
 pcall(function()
     settings().Rendering.QualityLevel = 1
@@ -18,8 +19,7 @@ LocalPlayer.Idled:Connect(function()
     end)
 end)
 
-repeat task.wait(0.1) until game.JobId and game.JobId ~= ""
-getgenv().TradeBotExecuted = game.JobId
+while not game.JobId or game.JobId == "" do task.wait(0.1) end
 
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
@@ -95,7 +95,10 @@ local function getAutoExecCode()
     ]], RawScriptURL)
 end
 
+local teleportQueued = false
 local function registerTeleportQueue()
+    if teleportQueued then return end
+    teleportQueued = true
     pcall(function()
         if queue_on_teleport then
             queue_on_teleport(getAutoExecCode())
@@ -169,6 +172,7 @@ local function serverHop()
                     for _, srv in ipairs(data.data) do
                         if type(srv) == "table" and srv.id and tostring(srv.id) ~= tostring(game.JobId) then
                             local idStr = tostring(srv.id)
+                            -- Strictly ensure blacklisted servers are completely ignored
                             if not blacklist[idStr] then
                                 table.insert(fallbackServers, idStr)
                                 if srv.playing and srv.maxPlayers and srv.playing >= 2 and srv.playing <= (srv.maxPlayers - 1) then
@@ -198,6 +202,7 @@ local function serverHop()
                 task.wait(4)
             end
         else
+            -- If proxy fails, use a retry loop instead of regular Teleport to avoid rejoining same server
             while true do
                 pcall(function() TeleportService:Teleport(PlaceId, LocalPlayer) end)
                 task.wait(4)
