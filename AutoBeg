@@ -193,56 +193,12 @@ serverHop = function()
     if staggerDelay > 0 then task.wait(staggerDelay) end
 
     task.spawn(function()
-        local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
-        local targetServer = nil
-
-        print("[TradeBot] Attempting fast API server fetch...")
-
-        if req then
-            local success, responseText = pcall(function()
-                local res = req({
-                    Url = "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=50",
-                    Method = "GET",
-                    Headers = { ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
-                })
-                if res and (res.StatusCode == 200 or res.status_code == 200) then
-                    return res.Body or res.body
-                end
-                error("Request failed")
-            end)
-
-            if success and responseText then
-                local ok, data = pcall(function() return HttpService:JSONDecode(responseText) end)
-                if ok and data and data.data then
-                    local bl = getBlacklist()
-                    for _, srv in ipairs(data.data) do
-                        if type(srv) == "table" and srv.id and tostring(srv.id) ~= tostring(game.JobId) then
-                            if srv.playing and srv.maxPlayers and srv.playing < srv.maxPlayers then
-                                if not bl[tostring(srv.id)] then
-                                    targetServer = tostring(srv.id)
-                                    break
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-
-        if targetServer then
-            print("[TradeBot] Teleporting to instance:", targetServer)
-            local tpSuccess = pcall(function()
-                TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
-            end)
-            if tpSuccess then return end
-        end
-
-        print("[TradeBot] Using standard Roblox matchmaking fallback...")
-        local fbSuccess, fbErr = pcall(function()
+        print("[TradeBot] Finding new server via standard matchmaking...")
+        local success, err = pcall(function()
             TeleportService:Teleport(PlaceId, LocalPlayer)
         end)
-        if not fbSuccess then
-            warn("[TradeBot] Standard teleport error:", fbErr)
+        if not success then
+            warn("[TradeBot] Teleport error:", err)
             task.delay(4, function()
                 getgenv().IsHopping = nil
                 serverHop()
