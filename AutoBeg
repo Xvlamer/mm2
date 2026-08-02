@@ -217,7 +217,7 @@ serverHop = function()
         local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
         local targetServer = nil
 
-        print("[TradeBot] Fetching and sorting servers to find the fullest instance...")
+        print("[TradeBot] Fetching servers and distributing alt across top instances...")
 
         if req then
             local success, responseText = pcall(function()
@@ -240,7 +240,6 @@ serverHop = function()
                     
                     for _, srv in ipairs(data.data) do
                         if type(srv) == "table" and srv.id and tostring(srv.id) ~= tostring(game.JobId) then
-                            -- Ensure it's populated (at least 5 players) but not completely full
                             if srv.playing and srv.maxPlayers and srv.playing >= 5 and srv.playing < srv.maxPlayers then
                                 if not bl[tostring(srv.id)] then
                                     table.insert(validServers, srv)
@@ -249,14 +248,18 @@ serverHop = function()
                         end
                     end
 
-                    -- Manually sort servers from highest player count to lowest player count
+                    -- Sort highest player count to lowest
                     table.sort(validServers, function(a, b)
                         return a.playing > b.playing
                     end)
 
                     if #validServers > 0 then
-                        targetServer = tostring(validServers[1].id)
-                        print("[TradeBot] Target locked! Joining fullest server with " .. tostring(validServers[1].playing) .. "/" .. tostring(validServers[1].maxPlayers) .. " players.")
+                        -- Spread alts across the top 5 servers to prevent collision stampedes
+                        local topPoolSize = math.min(5, #validServers)
+                        local targetIndex = ((altNumber - 1) % topPoolSize) + 1
+                        
+                        targetServer = tostring(validServers[targetIndex].id)
+                        print("[TradeBot] Alt " .. tostring(altNumber) .. " locking server index " .. tostring(targetIndex) .. " with " .. tostring(validServers[targetIndex].playing) .. "/" .. tostring(validServers[targetIndex].maxPlayers) .. " players.")
                     end
                 end
             end
