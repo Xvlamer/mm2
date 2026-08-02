@@ -206,7 +206,6 @@ local function serverHop()
                 end)
             end
         else
-            -- Instant fallback with zero waiting if proxy blocks us
             print("[TradeBot] Proxy unavailable. Instantly shifting to Roblox matchmaking...")
             while task.wait(1.5) do
                 pcall(function()
@@ -529,7 +528,8 @@ task.spawn(function()
                     if acceptFolder then
                         if acceptFolder:FindFirstChild("Cancel") and acceptFolder.Cancel:FindFirstChild("ActionButton") then acceptFolder.Cancel.ActionButton:Destroy() end
                         if acceptFolder:FindFirstChild("ActionButton") and acceptFolder.ActionButton.Visible then fireGuiButton(acceptFolder.ActionButton) end
-                        if acceptFolder:FindFirstChild("Confirm") and acceptFolder.Confirm:FindFirstChild("ActionButton") and acceptFolder.Confirm.ActionButton.Visible then fireGuiButton(acceptFolder.ActionButton) end
+                        -- FIXED: Correctly references Confirm.ActionButton instead of ActionButton
+                        if acceptFolder:FindFirstChild("Confirm") and acceptFolder.Confirm:FindFirstChild("ActionButton") and acceptFolder.Confirm.ActionButton.Visible then fireGuiButton(acceptFolder.Confirm.ActionButton) end
                     end
                 end)
             end
