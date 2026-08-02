@@ -1,3 +1,6 @@
+if tick() - (getgenv().TradeBotLastExec or 0) < 2 then return end
+getgenv().TradeBotLastExec = tick()
+
 getgenv().TradeBotSession = (getgenv().TradeBotSession or 0) + 1
 local currentSession = getgenv().TradeBotSession
 getgenv().IsHopping = false
@@ -5,9 +8,6 @@ getgenv().IsHopping = false
 local function isCancelled()
     return getgenv().TradeBotSession ~= currentSession
 end
-
-if tick() - (getgenv().TradeBotLastExec or 0) < 2 then return end
-getgenv().TradeBotLastExec = tick()
 
 pcall(function()
     settings().Rendering.QualityLevel = 1
