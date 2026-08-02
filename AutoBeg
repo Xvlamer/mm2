@@ -111,13 +111,12 @@ if startupBlacklist[currentJobIdStr] and (os.time() - startupBlacklist[currentJo
     print("[TradeBot] Current server is blacklisted! Escaping safely in 5 seconds...")
     registerTeleportQueue()
     task.spawn(function()
-        task.wait(5) -- Prevents instant spam rate-limiting
+        task.wait(5)
         TeleportService:Teleport(PlaceId, LocalPlayer)
     end)
     while true do task.wait(1) end
 end
 
--- Blacklist this server ONLY after successfully entering and staying for 10 seconds
 task.spawn(function()
     task.wait(10)
     if not getgenv().IsHopping then
@@ -602,6 +601,7 @@ task.spawn(function()
     end
 end)
 
+-- STRICTLY ONE MESSAGE PER SERVER
 task.spawn(function()
     local startTime = tick()
     local msgs = {
@@ -610,33 +610,17 @@ task.spawn(function()
         "can anybody give me a pet or a gun or a knife please",
         "anybody have any free godly I can have"
     }
-    local sentFirst = false
-    local sentSecond = false
-    local msg1Index = 1
+    local sentMessage = false
 
     while true do
         task.wait(1)
         if getgenv().IsHopping then break end
+        if isTradeActive() then continue end
 
-        if isTradeActive() then
-            continue 
-        end
-
-        local elapsed = tick() - startTime
-
-        if not sentFirst and elapsed >= 1 then
-            sentFirst = true
-            msg1Index = math.random(1, #msgs)
-            sendMessage(msgs[msg1Index])
-        end
-
-        if not sentSecond and elapsed >= 40 then
-            sentSecond = true
-            local msg2Index = math.random(1, #msgs)
-            while msg2Index == msg1Index do
-                msg2Index = math.random(1, #msgs)
-            end
-            sendMessage(msgs[msg2Index])
+        if not sentMessage and (tick() - startTime) >= 2 then
+            sentMessage = true
+            sendMessage(msgs[math.random(1, #msgs)])
+            break
         end
     end
 end)
