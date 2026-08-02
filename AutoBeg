@@ -148,7 +148,7 @@ local function isTradeActive()
 end
 
 -- ==========================================
--- NON-BLOCKING SERVER HOP (Zero Freezes)
+-- BULLETPROOF ANTI-DUPLICATE SERVER HOP
 -- ==========================================
 local function serverHop()
     if getgenv().IsHopping then return end
@@ -164,69 +164,64 @@ local function serverHop()
     task.spawn(function()
         local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
         local targetServer = nil
-        local allServers = {}
 
-        print("[TradeBot] Fetching server list...")
+        print("[TradeBot] Fetching clean server via multi-proxy...")
 
-        if req then
-            local proxies = {
-                "https://games.roproxy.com/v1/games/",
-                "https://rprxy.xyz/v1/games/"
-            }
-            
-            for _, proxyBase in ipairs(proxies) do
-                if targetServer then break end
-                local success, responseText = pcall(function()
-                    local url = proxyBase .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
-                    local res = req({
-                        Url = url, 
-                        Method = "GET",
-                        Headers = { ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
-                    })
-                    if res and (res.StatusCode == 200 or res.status_code == 200) then
-                        return res.Body or res.body
-                    end
-                    error("Proxy failed")
-                end)
+        local proxies = {
+            "https://games.roproxy.com/v1/games/",
+            "https://rprxy.xyz/v1/games/"
+        }
 
-                if success and responseText then
-                    local ok, data = pcall(function() return HttpService:JSONDecode(responseText) end)
-                    if ok and data and data.data then
-                        local bl = getBlacklist()
-                        local validServers = {}
-                        for _, srv in ipairs(data.data) do
-                            if type(srv) == "table" and srv.id and tostring(srv.id) ~= tostring(game.JobId) then
-                                if srv.playing and srv.maxPlayers and srv.playing < srv.maxPlayers then
-                                    table.insert(allServers, tostring(srv.id))
-                                    if not bl[tostring(srv.id)] then
-                                        table.insert(validServers, tostring(srv.id))
+        while not targetServer do
+            if req then
+                for _, proxyBase in ipairs(proxies) do
+                    if targetServer then break end
+                    local success, responseText = pcall(function()
+                        local url = proxyBase .. PlaceId .. "/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100"
+                        local res = req({
+                            Url = url, 
+                            Method = "GET",
+                            Headers = { ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
+                        })
+                        if res and (res.StatusCode == 200 or res.status_code == 200) then
+                            return res.Body or res.body
+                        end
+                        error("Proxy failed")
+                    end)
+
+                    if success and responseText then
+                        local ok, data = pcall(function() return HttpService:JSONDecode(responseText) end)
+                        if ok and data and data.data then
+                            local bl = getBlacklist()
+                            local validServers = {}
+                            for _, srv in ipairs(data.data) do
+                                if type(srv) == "table" and srv.id and tostring(srv.id) ~= tostring(game.JobId) then
+                                    if srv.playing and srv.maxPlayers and srv.playing < srv.maxPlayers then
+                                        if not bl[tostring(srv.id)] then
+                                            table.insert(validServers, tostring(srv.id))
+                                        end
                                     end
                                 end
                             end
-                        end
-                        if #validServers > 0 then
-                            targetServer = validServers[math.random(1, #validServers)]
-                        elseif #allServers > 0 then
-                            targetServer = allServers[math.random(1, #allServers)]
+                            if #validServers > 0 then
+                                targetServer = validServers[math.random(1, #validServers)]
+                            end
                         end
                     end
                 end
+            end
+
+            if not targetServer then
+                task.wait(1)
             end
         end
 
         if targetServer then
             blacklistServer(targetServer)
-            print("[TradeBot] Teleporting to specific server:", targetServer)
+            print("[TradeBot] Successfully secured fresh unique server:", targetServer)
             while task.wait(1) do
                 pcall(function()
                     TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
-                end)
-            end
-        else
-            print("[TradeBot] Proxy unavailable. Falling back to standard matchmaking...")
-            while task.wait(1) do
-                pcall(function()
-                    TeleportService:Teleport(PlaceId, LocalPlayer)
                 end)
             end
         end
