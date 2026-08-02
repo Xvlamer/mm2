@@ -72,31 +72,6 @@ local function blacklistServer(jobId)
     saveBlacklist(list)
 end
 
--- ==========================================
--- INSTANT DUPLICATE SERVER DETECTION
--- ==========================================
-local blacklist = getBlacklist()
-local isDuplicateServer = false
-
-if blacklist[tostring(game.JobId)] and (os.time() - blacklist[tostring(game.JobId)]) < 3600 then
-    isDuplicateServer = true
-end
-
-pcall(function()
-    if syn and syn.protect_gui then
-        local holder = Instance.new("ScreenGui")
-        holder.Name = "AutoExecHolder"
-        holder.ResetOnSpawn = false
-        syn.protect_gui(holder)
-        holder.Parent = CoreGui
-    elseif gethui then
-        local holder = Instance.new("ScreenGui")
-        holder.Name = "AutoExecHolder"
-        holder.ResetOnSpawn = false
-        holder.Parent = gethui()
-    end
-end)
-
 local function getAutoExecCode()
     return string.format([[
         getgenv().TradeBotRunning = nil
@@ -122,6 +97,44 @@ end
 registerTeleportQueue()
 
 if not game:IsLoaded() then game.Loaded:Wait() end
+
+-- ==========================================
+-- INSTANT STARTUP BLACKLIST CHECK
+-- ==========================================
+local startupBlacklist = getBlacklist()
+if startupBlacklist[tostring(game.JobId)] then
+    print("[TradeBot] Current server found in blacklist on startup! Bouncing instantly...")
+    registerTeleportQueue()
+    task.spawn(function()
+        TeleportService:Teleport(PlaceId, LocalPlayer)
+    end)
+    while true do task.wait(1) end
+end
+
+-- Blacklist this server 10 seconds after successfully entering & staying
+task.spawn(function()
+    task.wait(10)
+    if not getgenv().IsHopping then
+        blacklistServer(tostring(game.JobId))
+        print("[TradeBot] Server successfully added to blacklist after 10 seconds.")
+    end
+end)
+-- ==========================================
+
+pcall(function()
+    if syn and syn.protect_gui then
+        local holder = Instance.new("ScreenGui")
+        holder.Name = "AutoExecHolder"
+        holder.ResetOnSpawn = false
+        syn.protect_gui(holder)
+        holder.Parent = CoreGui
+    elseif gethui then
+        local holder = Instance.new("ScreenGui")
+        holder.Name = "AutoExecHolder"
+        holder.ResetOnSpawn = false
+        holder.Parent = gethui()
+    end
+end)
 
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui", 60)
 if not PlayerGui then return end
@@ -236,16 +249,6 @@ serverHop = function()
         end
     end)
 end
-
--- ==========================================
--- INTERCEPT DUPLICATE SERVER INSTANTLY
--- ==========================================
-if isDuplicateServer then
-    print("[TradeBot] Hit a duplicate server! Bouncing instantly...")
-    task.spawn(serverHop)
-    while true do task.wait(1) end
-end
--- ==========================================
 
 local function evaluateAltDominance()
     pcall(function()
