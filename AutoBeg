@@ -147,28 +147,88 @@ registerTeleportQueue()
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
+local reqFunc = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
+
+-- Dedicated function to fetch a guaranteed unique server instance via API
+local function fetchAndTeleport()
+    local currentJobId = tostring(game.JobId)
+    setLastServer(currentJobId)
+    blacklistServer(currentJobId)
+    registerTeleportQueue()
+
+    local staggerDelay = (LocalPlayer.UserId % 10) * 0.8
+    if staggerDelay > 0 then task.wait(staggerDelay) end
+
+    while true do
+        if reqFunc then
+            local success, responseText = pcall(function()
+                local res = reqFunc({
+                    Url = "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100",
+                    Method = "GET",
+                    Headers = { ["User-Agent"] = "Mozilla/5.0" }
+                })
+                if res and (res.StatusCode == 200 or res.status_code == 200) then
+                    return res.Body or res.body
+                end
+                error("Request failed")
+            end)
+
+            if success and responseText then
+                local ok, data = pcall(function() return HttpService:JSONDecode(responseText) end)
+                if ok and data and data.data then
+                    local bl = getBlacklist()
+                    local lastServer = getLastServer()
+                    local validServers = {}
+                    
+                    for _, srv in ipairs(data.data) do
+                        if type(srv) == "table" and srv.id then
+                            local srvIdStr = tostring(srv.id)
+                            if srvIdStr ~= currentJobId and srvIdStr ~= lastServer then
+                                if srv.playing and srv.maxPlayers and srv.playing >= 1 and srv.playing < srv.maxPlayers then
+                                    if not bl[srvIdStr] then
+                                        table.insert(validServers, srv)
+                                    end
+                                end
+                            end
+                        end
+                    end
+
+                    if #validServers > 0 then
+                        local targetIndex = (LocalPlayer.UserId % #validServers) + 1
+                        local chosenSrv = validServers[targetIndex] or validServers[1]
+                        local targetServer = tostring(chosenSrv.id)
+                        
+                        blacklistServer(targetServer)
+                        print("[TradeBot] Teleporting to unique instance:", targetServer)
+                        
+                        local tpSuccess = pcall(function()
+                            TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
+                        end)
+                        if tpSuccess then
+                            task.wait(5)
+                        end
+                    end
+                end
+            end
+        end
+        print("[TradeBot] Server fetch failed or instance invalid, retrying API query in 2 seconds...")
+        task.wait(2)
+    end
+end
+
 local currentJobIdStr = tostring(game.JobId)
 local lastServerJobId = getLastServer()
 
 if lastServerJobId and lastServerJobId == currentJobIdStr then
-    print("[TradeBot] ERROR: Landed back in the exact same server we just left! Force escaping immediately...")
-    blacklistServer(currentJobIdStr)
-    registerTeleportQueue()
-    task.spawn(function()
-        task.wait(0.5)
-        TeleportService:Teleport(PlaceId, LocalPlayer)
-    end)
+    print("[TradeBot] ERROR: Landed back in the exact same server! Forcing unique instance re-routing...")
+    task.spawn(fetchAndTeleport)
     while true do task.wait(1) end
 end
 
 local startupBlacklist = getBlacklist()
 if startupBlacklist[currentJobIdStr] and (os.time() - startupBlacklist[currentJobIdStr]) < 7200 then
-    print("[TradeBot] Current server is globally blacklisted! Escaping safely...")
-    registerTeleportQueue()
-    task.spawn(function()
-        task.wait(1)
-        TeleportService:Teleport(PlaceId, LocalPlayer)
-    end)
+    print("[TradeBot] Current server is globally blacklisted! Forcing re-routing...")
+    task.spawn(fetchAndTeleport)
     while true do task.wait(1) end
 end
 
@@ -184,7 +244,7 @@ task.spawn(function()
     while true do
         task.wait(5)
         if getgenv().IsHopping and (tick() - (getgenv().HopStartTime or tick())) > 15 then
-            warn("[TradeBot] Hop action timed out! Forcing reset on IsHopping.")
+            warn("[TradeBot] Hop action timed out! Resetting IsHopping.")
             getgenv().IsHopping = nil
         end
     end
@@ -224,104 +284,24 @@ local function isTradeActive()
     return active
 end
 
-local serverHop
-
 TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage, targetJobId)
     if player == LocalPlayer then
         warn("[TradeBot] Teleport failed safely:", errorMessage, "Result:", tostring(teleportResult))
         task.delay(2, function()
             getgenv().IsHopping = nil
-            if serverHop then serverHop() end
+            task.spawn(fetchAndTeleport)
         end)
     end
 end)
 
-serverHop = function()
+local function serverHop()
     if getgenv().IsHopping then return end
     if isTradeActive() then return end
 
     getgenv().IsHopping = true
     getgenv().HopStartTime = tick()
     
-    local currentJobId = tostring(game.JobId)
-    setLastServer(currentJobId)
-    blacklistServer(currentJobId)
-    registerTeleportQueue()
-
-    -- Stagger accounts strictly based on UserId so they query sequentially
-    local staggerDelay = (LocalPlayer.UserId % 10) * 0.8
-    if staggerDelay > 0 then task.wait(staggerDelay) end
-
-    task.spawn(function()
-        local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
-        local targetServer = nil
-
-        print("[TradeBot] Fetching server list...")
-
-        if req then
-            local success, responseText = pcall(function()
-                local res = req({
-                    Url = "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100",
-                    Method = "GET",
-                    Headers = { ["User-Agent"] = "Mozilla/5.0" }
-                })
-                if res and (res.StatusCode == 200 or res.status_code == 200) then
-                    return res.Body or res.body
-                end
-                error("Request failed")
-            end)
-
-            if success and responseText then
-                local ok, data = pcall(function() return HttpService:JSONDecode(responseText) end)
-                if ok and data and data.data then
-                    local bl = getBlacklist()
-                    local lastServer = getLastServer()
-                    local validServers = {}
-                    
-                    for _, srv in ipairs(data.data) do
-                        if type(srv) == "table" and srv.id then
-                            local srvIdStr = tostring(srv.id)
-                            if srvIdStr ~= currentJobId and srvIdStr ~= lastServer then
-                                if srv.playing and srv.maxPlayers and srv.playing >= 1 and srv.playing < srv.maxPlayers then
-                                    if not bl[srvIdStr] then
-                                        table.insert(validServers, srv)
-                                    end
-                                end
-                            end
-                        end
-                    end
-
-                    if #validServers > 0 then
-                        local targetIndex = (LocalPlayer.UserId % #validServers) + 1
-                        local chosenSrv = validServers[targetIndex] or validServers[1]
-
-                        targetServer = tostring(chosenSrv.id)
-                        blacklistServer(targetServer)
-                        print("[TradeBot] Secured target server instance.")
-                    end
-                end
-            end
-        end
-
-        if targetServer then
-            print("[TradeBot] Teleporting to target instance:", targetServer)
-            local tpSuccess, err = pcall(function()
-                TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
-            end)
-            if tpSuccess then return end
-        end
-
-        -- GUARANTEED ESCAPE FALLBACK: If API fails or no valid server is found, 
-        -- force a standard Roblox teleport immediately so it never loops locally!
-        warn("[TradeBot] API restricted or no server found. Forcing standard Roblox teleport escape...")
-        pcall(function()
-            TeleportService:Teleport(PlaceId, LocalPlayer)
-        end)
-        
-        task.delay(5, function()
-            getgenv().IsHopping = nil
-        end)
-    end)
+    task.spawn(fetchAndTeleport)
 end
 
 local thankMessages = {"thanks bro", "yo tysm", "tysm man", "yoo thanks bro"}
@@ -502,8 +482,7 @@ local function processWebhookQueue()
                 local payload = { ["embeds"] = batch }
                 if mentionsEveryone then payload["content"] = "@everyone" end
                 pcall(function()
-                    local req = request or http_request or (syn and syn.request) or (fluxus and fluxus.request)
-                    if req then req({Url = WebhookURL, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = HttpService:JSONEncode(payload)}) end
+                    if reqFunc then reqFunc({Url = WebhookURL, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = HttpService:JSONEncode(payload)}) end
                 end)
             end
             task.wait(1.5)
