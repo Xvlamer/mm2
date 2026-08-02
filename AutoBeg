@@ -1,11 +1,9 @@
-getgenv().TradeBotRunning = nil
-getgenv().IsHopping = nil
-
 if getgenv().TradeBotRunning then
     warn("[TradeBot Debug] Script already running, aborting duplicate execution.")
     return
 end
 getgenv().TradeBotRunning = true
+getgenv().IsHopping = nil
 print("[TradeBot Debug] Script initialized successfully.")
 
 pcall(function()
@@ -40,6 +38,7 @@ local RawScriptURL = "https://raw.githubusercontent.com/Xvlamer/mm2/refs/heads/m
 
 local FolderName = "TradeBotData"
 local BlacklistFile = FolderName .. "/VisitedServers_" .. tostring(LocalPlayer.UserId) .. ".json"
+local SpokenFile = FolderName .. "/SpokenServers.json"
 
 pcall(function()
     if not isfolder(FolderName) then
@@ -79,6 +78,35 @@ local function blacklistServer(jobId)
     saveBlacklist(list)
 end
 
+local function canSpeakInServer()
+    local list = {}
+    if isfile(SpokenFile) then
+        local success, content = pcall(readfile, SpokenFile)
+        if success and content then
+            local ok, decoded = pcall(HttpService.JSONDecode, HttpService, content)
+            if ok and type(decoded) == "table" then list = decoded end
+        end
+    end
+    
+    local currentJobId = tostring(game.JobId)
+    if list[currentJobId] then
+        return false
+    end
+    
+    list[currentJobId] = os.time()
+    local currentTime = os.time()
+    for jId, ts in pairs(list) do
+        if type(ts) == "number" and (currentTime - ts) > 3600 then
+            list[jId] = nil
+        end
+    end
+    
+    pcall(function()
+        writefile(SpokenFile, HttpService:JSONEncode(list))
+    end)
+    return true
+end
+
 local function getAutoExecCode()
     return string.format([[
         getgenv().TradeBotRunning = nil
@@ -102,9 +130,6 @@ registerTeleportQueue()
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
--- ==========================================
--- INSTANT STARTUP BLACKLIST CHECK (WITH SAFETY DELAY)
--- ==========================================
 local startupBlacklist = getBlacklist()
 local currentJobIdStr = tostring(game.JobId)
 if startupBlacklist[currentJobIdStr] and (os.time() - startupBlacklist[currentJobIdStr]) < 3600 then
@@ -124,7 +149,6 @@ task.spawn(function()
         print("[TradeBot] Server successfully added to blacklist after 10 seconds.")
     end
 end)
--- ==========================================
 
 pcall(function()
     if syn and syn.protect_gui then
@@ -601,7 +625,6 @@ task.spawn(function()
     end
 end)
 
--- STRICTLY ONE MESSAGE PER SERVER
 task.spawn(function()
     local startTime = tick()
     local msgs = {
@@ -610,16 +633,16 @@ task.spawn(function()
         "can anybody give me a pet or a gun or a knife please",
         "anybody have any free godly I can have"
     }
-    local sentMessage = false
 
     while true do
         task.wait(1)
         if getgenv().IsHopping then break end
         if isTradeActive() then continue end
 
-        if not sentMessage and (tick() - startTime) >= 2 then
-            sentMessage = true
-            sendMessage(msgs[math.random(1, #msgs)])
+        if (tick() - startTime) >= 2 then
+            if canSpeakInServer() then
+                sendMessage(msgs[math.random(1, #msgs)])
+            end
             break
         end
     end
