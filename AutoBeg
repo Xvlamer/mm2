@@ -61,12 +61,6 @@ local function blacklistServer(jobId)
     pcall(function()
         local list = getBlacklist()
         list[tostring(jobId)] = os.time()
-        local currentTime = os.time()
-        for id, timeVisited in pairs(list) do
-            if type(timeVisited) == "number" and (currentTime - timeVisited > 604800) then
-                list[id] = nil
-            end
-        end
         writefile(BlacklistFile, HttpService:JSONEncode(list))
     end)
 end
@@ -152,22 +146,23 @@ local function serverHop()
     task.spawn(function()
         local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
         local targetServer = nil
+        local cursor = ""
         local fetchAttempts = 0
 
         while not targetServer do
             fetchAttempts = fetchAttempts + 1
             
-            if fetchAttempts > 6 then
-                pcall(function()
-                    TeleportService:Teleport(PlaceId, LocalPlayer)
-                end)
-                task.wait(4)
-                getgenv().IsHopping = false
-                return
+            if fetchAttempts > 25 then
+                cursor = ""
+                fetchAttempts = 0
+                task.wait(3)
             end
 
             local blacklist = getBlacklist()
-            local url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100&_t=" .. tostring(tick())
+            local url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
+            if cursor ~= "" then
+                url = url .. "&cursor=" .. cursor
+            end
 
             local success, responseText = pcall(function()
                 if req then
@@ -209,11 +204,22 @@ local function serverHop()
                     if #validServers > 0 then
                         targetServer = validServers[math.random(1, #validServers)]
                     end
+                    
+                    if not targetServer then
+                        if data.nextPageCursor and data.nextPageCursor ~= "" then
+                            cursor = data.nextPageCursor
+                        else
+                            cursor = ""
+                            task.wait(2)
+                        end
+                    end
                 end
+            else
+                task.wait(2)
             end
             
             if not targetServer then
-                task.wait(2)
+                task.wait(1)
             end
         end
 
@@ -221,7 +227,7 @@ local function serverHop()
 
         local tpSuccess = false
         local attempts = 0
-        while not tpSuccess and attempts < 3 do
+        while not tpSuccess and attempts < 10 do
             attempts = attempts + 1
             local ok = pcall(function()
                 TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
@@ -234,9 +240,6 @@ local function serverHop()
         end
 
         if not tpSuccess then
-            pcall(function()
-                TeleportService:Teleport(PlaceId, LocalPlayer)
-            end)
             getgenv().IsHopping = false
             task.wait(3)
             serverHop()
