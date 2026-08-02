@@ -150,15 +150,31 @@ local function serverHop()
     task.spawn(function()
         local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
         local targetServer = nil
+        local fetchAttempts = 0
 
         while not targetServer do
+            fetchAttempts = fetchAttempts + 1
+            if fetchAttempts > 6 then
+                -- Fallback: If API fails/hangs, force standard Roblox server hop instantly
+                pcall(function()
+                    TeleportService:Teleport(PlaceId, LocalPlayer)
+                end)
+                task.wait(4)
+                getgenv().IsHopping = false
+                return
+            end
+
             local blacklist = getBlacklist()
             local url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100&_t=" .. tostring(tick())
 
             local success, responseText = pcall(function()
                 if req then
                     local res = req({Url = url, Method = "GET"})
-                    if res and res.StatusCode == 200 then return res.Body end
+                    if res then
+                        local code = res.StatusCode or res.status_code
+                        local body = res.Body or res.body
+                        if code == 200 and body then return body end
+                    end
                 end
                 return game:HttpGet(url)
             end)
@@ -206,8 +222,12 @@ local function serverHop()
         end
 
         if not tpSuccess then
+            -- Fallback to standard teleport if instance teleport fails
+            pcall(function()
+                TeleportService:Teleport(PlaceId, LocalPlayer)
+            end)
             getgenv().IsHopping = false
-            task.wait(1)
+            task.wait(3)
             serverHop()
         end
     end)
