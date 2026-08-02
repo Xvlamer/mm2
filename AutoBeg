@@ -126,7 +126,12 @@ local function isTradeActive()
     local active = false
     pcall(function()
         local tradeGui = PlayerGui:FindFirstChild("TradeGUI")
-        if tradeGui and tradeGui.Enabled then active = true end
+        if tradeGui and tradeGui.Enabled then
+            local container = tradeGui:FindFirstChild("Container")
+            if container and container.Visible then
+                active = true
+            end
+        end
     end)
     return active
 end
@@ -145,8 +150,9 @@ local function serverHop()
     task.spawn(function()
         local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
         local targetServer = nil
+        local startTime = tick()
 
-        while not targetServer do
+        while not targetServer and (tick() - startTime < 10) do
             local blacklist = getBlacklist()
             local url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
 
@@ -188,14 +194,21 @@ local function serverHop()
             end
             
             if not targetServer then
-                task.wait(2)
+                task.wait(1)
             end
         end
 
-        blacklistServer(targetServer)
-        while true do
-            pcall(function() TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer) end)
-            task.wait(4)
+        if targetServer then
+            blacklistServer(targetServer)
+            while true do
+                pcall(function() TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer) end)
+                task.wait(4)
+            end
+        else
+            while true do
+                pcall(function() TeleportService:Teleport(PlaceId, LocalPlayer) end)
+                task.wait(4)
+            end
         end
     end)
 end
