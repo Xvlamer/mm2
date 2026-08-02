@@ -1,3 +1,4 @@
+getgenv().TradeBotRunning = nil
 if getgenv().TradeBotRunning then
     warn("[TradeBot Debug] Script already running, aborting duplicate execution.")
     return
@@ -144,12 +145,13 @@ local function serverHop()
     if staggerDelay > 0 then task.wait(staggerDelay) end
 
     task.spawn(function()
+        local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
         local targetServer = nil
         local cursor = ""
         local fetchAttempts = 0
         local allCollectedServers = {}
 
-        print("[TradeBot] Starting server search...")
+        print("[TradeBot] Searching for a brand new server...")
 
         while not targetServer do
             fetchAttempts = fetchAttempts + 1
@@ -160,7 +162,7 @@ local function serverHop()
                         return (a.time or 0) < (b.time or 0)
                     end)
                     targetServer = allCollectedServers[1].id
-                    print("[TradeBot] Fallback: Picking oldest collected server:", targetServer)
+                    print("[TradeBot] Fallback: Picking oldest server:", targetServer)
                     break
                 else
                     cursor = ""
@@ -170,13 +172,29 @@ local function serverHop()
             end
 
             local blacklist = getBlacklist()
-            local url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
+            -- sortOrder=Asc ensures we grab brand new/empty servers with the lowest player counts first
+            local url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100"
             if cursor ~= "" then
                 url = url .. "&cursor=" .. cursor
             end
 
             local success, responseText = pcall(function()
-                return game:HttpGet(url)
+                if req then
+                    local res = req({
+                        Url = url,
+                        Method = "GET",
+                        Headers = {
+                            ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                            ["Accept"] = "application/json"
+                        }
+                    })
+                    if res then
+                        local code = res.StatusCode or res.status_code
+                        local body = res.Body or res.body
+                        if code == 200 and body then return body end
+                    end
+                end
+                return nil
             end)
 
             if success and responseText then
@@ -201,7 +219,7 @@ local function serverHop()
                     
                     if #validServers > 0 then
                         targetServer = validServers[math.random(1, #validServers)]
-                        print("[TradeBot] Found fresh unvisited server:", targetServer)
+                        print("[TradeBot] Found brand new clean server:", targetServer)
                     elseif data.nextPageCursor and data.nextPageCursor ~= "" then
                         cursor = data.nextPageCursor
                     else
@@ -210,7 +228,7 @@ local function serverHop()
                                 return (a.time or 0) < (b.time or 0)
                             end)
                             targetServer = allCollectedServers[1].id
-                            print("[TradeBot] Reached end of pages, selecting oldest server:", targetServer)
+                            print("[TradeBot] Reached end of pages, selecting fallback server:", targetServer)
                         else
                             cursor = ""
                             task.wait(2)
@@ -218,7 +236,7 @@ local function serverHop()
                     end
                 end
             else
-                warn("[TradeBot] Failed to fetch server list via HttpGet, retrying...")
+                warn("[TradeBot] Request failed, retrying...")
                 task.wait(2)
             end
             
