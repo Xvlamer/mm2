@@ -59,7 +59,7 @@ local function blacklistServer(jobId)
         
         local currentTime = os.time()
         for id, timeVisited in pairs(list) do
-            if type(timeVisited) == "number" and (currentTime - timeVisited > 86400) then -- Kept for 24 hours to prevent infinite file bloat while preserving history
+            if type(timeVisited) == "number" and (currentTime - timeVisited > 86400) then
                 list[id] = nil
             end
         end
@@ -149,7 +149,8 @@ local function serverHop()
 
         while not targetServer do
             local blacklist = getBlacklist()
-            local url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
+            -- Added unique cache-buster parameter to prevent stale/cached API responses
+            local url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100&_t=" .. tostring(tick())
 
             local success, responseText = pcall(function()
                 if req then
@@ -167,7 +168,9 @@ local function serverHop()
                         if type(srv) == "table" and srv.id and tostring(srv.id) ~= tostring(game.JobId) then
                             local idStr = tostring(srv.id)
                             if not blacklist[idStr] then
-                                table.insert(validServers, idStr)
+                                if srv.playing and srv.maxPlayers and srv.playing < srv.maxPlayers then
+                                    table.insert(validServers, idStr)
+                                end
                             end
                         end
                     end
@@ -184,11 +187,26 @@ local function serverHop()
         end
 
         blacklistServer(targetServer)
-        while true do
-            pcall(function()
+
+        -- Safe teleport attempt block: prevents infinite looping on a broken/full server instance
+        local tpSuccess = false
+        local attempts = 0
+        while not tpSuccess and attempts < 3 do
+            attempts = attempts + 1
+            local ok = pcall(function()
                 TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
             end)
-            task.wait(3)
+            if ok then
+                tpSuccess = true
+            else
+                task.wait(2)
+            end
+        end
+
+        if not tpSuccess then
+            getgenv().IsHopping = false
+            task.wait(1)
+            serverHop()
         end
     end)
 end
