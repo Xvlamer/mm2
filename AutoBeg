@@ -217,12 +217,12 @@ serverHop = function()
         local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
         local targetServer = nil
 
-        print("[TradeBot] Finding unique server instance via API...")
+        print("[TradeBot] Finding populated server instance via API...")
 
         if req then
             local success, responseText = pcall(function()
                 local res = req({
-                    Url = "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100",
+                    Url = "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100",
                     Method = "GET",
                     Headers = { ["User-Agent"] = "Mozilla/5.0" }
                 })
@@ -238,7 +238,8 @@ serverHop = function()
                     local bl = getBlacklist()
                     for _, srv in ipairs(data.data) do
                         if type(srv) == "table" and srv.id and tostring(srv.id) ~= tostring(game.JobId) then
-                            if srv.playing and srv.maxPlayers and srv.playing < srv.maxPlayers then
+                            -- Requires at least 6 players to avoid empty servers, but not full
+                            if srv.playing and srv.maxPlayers and srv.playing >= 6 and srv.playing < srv.maxPlayers then
                                 if not bl[tostring(srv.id)] then
                                     targetServer = tostring(srv.id)
                                     break
