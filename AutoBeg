@@ -146,9 +146,9 @@ local function serverHop()
     task.spawn(function()
         local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
         local targetServer = nil
-        local startTime = tick()
 
-        while not targetServer and (tick() - startTime < 10) do
+        -- Keep looping until a valid, non-blacklisted server instance is found
+        while not targetServer do
             local blacklist = getBlacklist()
             local url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
 
@@ -167,15 +167,12 @@ local function serverHop()
                 local ok, data = pcall(HttpService.JSONDecode, HttpService, responseText)
                 if ok and data and data.data then
                     local validServers = {}
-                    local fallbackServers = {}
                     
                     for _, srv in ipairs(data.data) do
                         if type(srv) == "table" and srv.id and tostring(srv.id) ~= tostring(game.JobId) then
                             local idStr = tostring(srv.id)
-                            -- Strictly ensure blacklisted servers are completely ignored
                             if not blacklist[idStr] then
-                                table.insert(fallbackServers, idStr)
-                                if srv.playing and srv.maxPlayers and srv.playing >= 2 and srv.playing <= (srv.maxPlayers - 1) then
+                                if srv.playing and srv.maxPlayers and srv.playing < srv.maxPlayers then
                                     table.insert(validServers, idStr)
                                 end
                             end
@@ -184,29 +181,29 @@ local function serverHop()
                     
                     if #validServers > 0 then
                         targetServer = validServers[math.random(1, #validServers)]
-                    elseif #fallbackServers > 0 then
-                        targetServer = fallbackServers[math.random(1, #fallbackServers)]
+                    else
+                        -- If every server found is blacklisted, clear the blacklist file so we don't get stuck
+                        pcall(function()
+                            if isfile(BlacklistFile) then
+                                delfile(BlacklistFile)
+                            end
+                        end)
                     end
                 end
             end
             
             if not targetServer then
-                task.wait(1)
+                task.wait(2)
             end
         end
 
-        if targetServer then
-            blacklistServer(targetServer)
-            while true do
-                pcall(function() TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer) end)
-                task.wait(4)
-            end
-        else
-            -- If proxy fails, use a retry loop instead of regular Teleport to avoid rejoining same server
-            while true do
-                pcall(function() TeleportService:Teleport(PlaceId, LocalPlayer) end)
-                task.wait(4)
-            end
+        blacklistServer(targetServer)
+        -- Strictly use TeleportToPlaceInstance so it NEVER joins the current server
+        while true do
+            pcall(function()
+                TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
+            end)
+            task.wait(4)
         end
     end)
 end
