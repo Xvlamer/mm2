@@ -133,6 +133,9 @@ local function isTradeActive()
     return active
 end
 
+-- ==========================================
+-- REWRITTEN SERVER HOP TO PREVENT 403 LOOPS
+-- ==========================================
 local function serverHop()
     if getgenv().IsHopping then return end
     if isTradeActive() then return end
@@ -149,22 +152,21 @@ local function serverHop()
         local targetServer = nil
         local cursor = ""
         local fetchAttempts = 0
-        local allCollectedServers = {}
 
-        print("[TradeBot] Searching for a new server...")
+        print("[TradeBot] Initiating server hop sequence...")
 
         while not targetServer do
             fetchAttempts = fetchAttempts + 1
             
-            -- If API is blocked (403), fallback immediately to standard Roblox teleport matchmaking
-            if fetchAttempts > 5 then
-                print("[TradeBot] API restricted/blocked, using standard random server teleport...")
-                pcall(function()
-                    TeleportService:Teleport(PlaceId, LocalPlayer)
-                end)
-                task.wait(5)
-                fetchAttempts = 0
-                continue
+            -- FIX: If API is blocked 3 times, KILL the search loop completely and force teleport.
+            if fetchAttempts > 3 then
+                print("[TradeBot] Proxy completely blocked. Forcing standard Roblox teleport loop...")
+                while task.wait(3) do
+                    pcall(function()
+                        TeleportService:Teleport(PlaceId, LocalPlayer)
+                    end)
+                end
+                return -- This ensures the 403 searching loop never runs again.
             end
 
             local blacklist = getBlacklist()
@@ -174,36 +176,25 @@ local function serverHop()
             end
 
             local success, responseText = pcall(function()
-                if not req then error("No global request function found!") end
-                local res = req({
-                    Url = url,
-                    Method = "GET"
-                })
-                if not res then error("Request returned nil response.") end
-                local code = res.StatusCode or res.status_code
-                local body = res.Body or res.body
-                if code == 200 and body then
-                    return body
+                if not req then error("No request function") end
+                local res = req({Url = url, Method = "GET"})
+                local code = res and (res.StatusCode or res.status_code) or 0
+                if code == 200 then
+                    return res.Body or res.body
                 else
                     error("HTTP Code: " .. tostring(code))
                 end
             end)
 
             if success and responseText then
-                local ok, data = pcall(function()
-                    return HttpService:JSONDecode(responseText)
-                end)
-                
+                local ok, data = pcall(function() return HttpService:JSONDecode(responseText) end)
                 if ok and data and data.data then
                     local validServers = {}
                     for _, srv in ipairs(data.data) do
                         if type(srv) == "table" and srv.id and tostring(srv.id) ~= tostring(game.JobId) then
-                            local idStr = tostring(srv.id)
                             if srv.playing and srv.maxPlayers and srv.playing < srv.maxPlayers then
-                                local visitTime = blacklist[idStr]
-                                table.insert(allCollectedServers, { id = idStr, time = visitTime or 0 })
-                                if not visitTime then
-                                    table.insert(validServers, idStr)
+                                if not blacklist[tostring(srv.id)] then
+                                    table.insert(validServers, tostring(srv.id))
                                 end
                             end
                         end
@@ -211,51 +202,26 @@ local function serverHop()
                     
                     if #validServers > 0 then
                         targetServer = validServers[math.random(1, #validServers)]
-                        print("[TradeBot] Found clean server:", targetServer)
                     elseif data.nextPageCursor and data.nextPageCursor ~= "" then
                         cursor = data.nextPageCursor
-                    else
-                        if #allCollectedServers > 0 then
-                            table.sort(allCollectedServers, function(a, b)
-                                return (a.time or 0) < (b.time or 0)
-                            end)
-                            targetServer = allCollectedServers[1].id
-                        else
-                            cursor = ""
-                            task.wait(2)
-                        end
+                        fetchAttempts = 0 -- Only reset if we got a successful page
                     end
                 end
             else
-                task.wait(2)
-            end
-            
-            if not targetServer then
-                task.wait(1)
+                warn("[TradeBot] Request failed, reason:", tostring(responseText))
+                task.wait(1.5)
             end
         end
 
-        blacklistServer(targetServer)
-        print("[TradeBot] Teleporting to target server:", targetServer)
-
-        local tpSuccess = false
-        local attempts = 0
-        while not tpSuccess and attempts < 10 do
-            attempts = attempts + 1
-            local ok = pcall(function()
-                TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
-            end)
-            if ok then
-                tpSuccess = true
-            else
-                task.wait(2)
+        -- If the proxy actually works and finds a server
+        if targetServer then
+            blacklistServer(targetServer)
+            print("[TradeBot] Teleporting to specific server:", targetServer)
+            while task.wait(3) do
+                pcall(function()
+                    TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
+                end)
             end
-        end
-
-        if not tpSuccess then
-            pcall(function() TeleportService:Teleport(PlaceId, LocalPlayer) end)
-            getgenv().IsHopping = false
-            task.wait(3)
         end
     end)
 end
@@ -611,6 +577,7 @@ task.spawn(function()
     end
 end)
 
+-- TIMING LOGIC (Triggers Hop after 60s idle or 10s post-trade)
 task.spawn(function()
     local joinTime = tick()
     local tradeEndedTime = 0
