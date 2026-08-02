@@ -3,11 +3,7 @@ if getgenv().TradeBotExecuted == game.JobId then return end
 pcall(function()
     settings().Rendering.QualityLevel = 1
     settings().Physics.AllowSleep = false
-    if setfpscap then setfpscap(30) end
-    local RunService = game:GetService("RunService")
-    if RunService:IsStudio() == false then
-        pcall(function() RunService:Set3dRenderingEnabled(false) end)
-    end
+    if setfpscap then setfpscap(60) end
 end)
 
 local Players = game:GetService("Players")
