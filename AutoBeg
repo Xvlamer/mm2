@@ -120,17 +120,27 @@ local function serverHop()
             end)
 
             if type(reqFunc) == "function" then
-                local success, responseText = pcall(function()
-                    local res = reqFunc({
-                        Url = "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100",
-                        Method = "GET",
-                        Headers = { ["User-Agent"] = "Mozilla/5.0" }
-                    })
-                    if res and (res.StatusCode == 200 or res.status_code == 200) then return res.Body or res.body end
-                    error("Fetch Fail")
-                end)
+                local responseText
+                local urls = {
+                    "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100",
+                    "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
+                }
+                
+                for _, url in ipairs(urls) do
+                    local s, res = pcall(function()
+                        return reqFunc({
+                            Url = url,
+                            Method = "GET",
+                            Headers = { ["User-Agent"] = "Mozilla/5.0" }
+                        })
+                    end)
+                    if s and res and (res.StatusCode == 200 or res.status_code == 200) then
+                        responseText = res.Body or res.body
+                        break
+                    end
+                end
 
-                if success and responseText then
+                if responseText then
                     local ok, data = pcall(function() return HttpService:JSONDecode(responseText) end)
                     if ok and data and data.data then
                         local bl = getBlacklist()
@@ -140,7 +150,7 @@ local function serverHop()
                                 local srvIdStr = tostring(srv.id)
                                 if srvIdStr ~= tostring(game.JobId) and not bl[srvIdStr] then
                                     if srv.playing and srv.maxPlayers then
-                                        if srv.playing >= (srv.maxPlayers - 4) and srv.playing < srv.maxPlayers then
+                                        if srv.playing >= 5 and srv.playing < srv.maxPlayers then
                                             table.insert(validServers, srvIdStr)
                                         end
                                     end
@@ -200,13 +210,6 @@ local function isTradeActive()
 end
 
 local thankMessages = {"thanks bro", "yo tysm", "tysm man", "yoo thanks bro"}
-local spokenInServer = false
-
-local function canSpeakInServer()
-    if spokenInServer then return false end
-    spokenInServer = true
-    return true
-end
 
 local function sendMessage(msg)
     pcall(function()
@@ -516,34 +519,22 @@ task.spawn(function()
     end
 end)
 
+-- Unified Timer (Chat & Hopping combined so they can't desync)
 task.spawn(function()
-    local startTime = tick()
+    local joinTime = tick()
+    local msg1Sent = false
+    local msg2Sent = false
+    local wasTrading = false
+    local tradeEndedTime = 0
+    local hasTradedInServer = false
+    
     local msgs = {
         "can somebody give me a free weapon please",
         "can anybody give me a free pet or weapon please",
         "can anybody give me a pet or a gun or a knife please",
         "anybody have any free godly I can have"
     }
-    while true do
-        pcall(function()
-            if not getgenv().IsHopping and not isTradeActive() then
-                if (tick() - startTime) >= 2 then
-                    if canSpeakInServer() then
-                        sendMessage(msgs[math.random(1, #msgs)])
-                    end
-                    startTime = tick() + 999999 
-                end
-            end
-        end)
-        task.wait(1)
-    end
-end)
 
-task.spawn(function()
-    local joinTime = tick()
-    local tradeEndedTime = 0
-    local hasTradedInServer = false
-    local wasTrading = false
     while true do
         pcall(function()
             if not getgenv().IsHopping then
@@ -554,14 +545,29 @@ task.spawn(function()
                     if wasTrading then
                         wasTrading = false
                         tradeEndedTime = tick()
-                        hasThankedThisTrade = false
+                        hasThankedThisTrade = false -- Reset thank trigger for the next trade
                     end
+                    
+                    local elapsedSinceJoin = tick() - joinTime
+                    
+                    -- Handle Chat Timers
+                    if not msg1Sent and elapsedSinceJoin >= 1 then
+                        sendMessage(msgs[math.random(1, #msgs)])
+                        msg1Sent = true
+                    end
+                    
+                    if not msg2Sent and elapsedSinceJoin >= 40 then
+                        sendMessage(msgs[math.random(1, #msgs)])
+                        msg2Sent = true
+                    end
+                    
+                    -- Handle Hop Timers
                     if hasTradedInServer then
                         if tick() - tradeEndedTime >= 10 then
                             serverHop()
                         end
                     else
-                        if tick() - joinTime >= 70 then
+                        if elapsedSinceJoin >= 70 then
                             serverHop()
                         end
                     end
