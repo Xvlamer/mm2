@@ -148,7 +148,7 @@ local function isTradeActive()
 end
 
 -- ==========================================
--- BULLETPROOF ANTI-DUPLICATE SERVER HOP
+-- BULLETPROOF NON-BLOCKING SERVER HOP
 -- ==========================================
 local function serverHop()
     if getgenv().IsHopping then return end
@@ -165,19 +165,21 @@ local function serverHop()
         local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
         local targetServer = nil
 
-        print("[TradeBot] Fetching clean server via multi-proxy...")
+        print("[TradeBot] Fetching clean server via direct API...")
 
-        local proxies = {
-            "https://games.roproxy.com/v1/games/",
-            "https://rprxy.xyz/v1/games/"
+        local endpoints = {
+            "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100",
+            "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100",
+            "https://rprxy.xyz/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100"
         }
 
-        while not targetServer do
+        local attempts = 0
+        while not targetServer and attempts < 10 do
+            attempts = attempts + 1
             if req then
-                for _, proxyBase in ipairs(proxies) do
+                for _, url in ipairs(endpoints) do
                     if targetServer then break end
                     local success, responseText = pcall(function()
-                        local url = proxyBase .. PlaceId .. "/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100"
                         local res = req({
                             Url = url, 
                             Method = "GET",
@@ -186,7 +188,7 @@ local function serverHop()
                         if res and (res.StatusCode == 200 or res.status_code == 200) then
                             return res.Body or res.body
                         end
-                        error("Proxy failed")
+                        error("Request failed")
                     end)
 
                     if success and responseText then
@@ -212,7 +214,7 @@ local function serverHop()
             end
 
             if not targetServer then
-                task.wait(1)
+                task.wait(1.5)
             end
         end
 
@@ -222,6 +224,13 @@ local function serverHop()
             while task.wait(1) do
                 pcall(function()
                     TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
+                end)
+            end
+        else
+            print("[TradeBot] API limit reached. Forcing fallback teleport...")
+            while task.wait(1) do
+                pcall(function()
+                    TeleportService:Teleport(PlaceId, LocalPlayer)
                 end)
             end
         end
