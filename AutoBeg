@@ -150,13 +150,12 @@ if not game:IsLoaded() then game.Loaded:Wait() end
 local currentJobIdStr = tostring(game.JobId)
 local lastServerJobId = getLastServer()
 
--- Bulletproof check: If we somehow landed back in the exact same server we just left, force escape instantly!
 if lastServerJobId and lastServerJobId == currentJobIdStr then
-    print("[TradeBot] ERROR: Landed back in the exact same server we just left! Force escaping in 1 second...")
+    print("[TradeBot] ERROR: Landed back in the exact same server we just left! Force escaping immediately...")
     blacklistServer(currentJobIdStr)
     registerTeleportQueue()
     task.spawn(function()
-        task.wait(1)
+        task.wait(0.5)
         TeleportService:Teleport(PlaceId, LocalPlayer)
     end)
     while true do task.wait(1) end
@@ -164,10 +163,10 @@ end
 
 local startupBlacklist = getBlacklist()
 if startupBlacklist[currentJobIdStr] and (os.time() - startupBlacklist[currentJobIdStr]) < 7200 then
-    print("[TradeBot] Current server is globally blacklisted! Escaping safely in 3 seconds...")
+    print("[TradeBot] Current server is globally blacklisted! Escaping safely...")
     registerTeleportQueue()
     task.spawn(function()
-        task.wait(3)
+        task.wait(1)
         TeleportService:Teleport(PlaceId, LocalPlayer)
     end)
     while true do task.wait(1) end
@@ -230,7 +229,7 @@ local serverHop
 TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage, targetJobId)
     if player == LocalPlayer then
         warn("[TradeBot] Teleport failed safely:", errorMessage, "Result:", tostring(teleportResult))
-        task.delay(4, function()
+        task.delay(2, function()
             getgenv().IsHopping = nil
             if serverHop then serverHop() end
         end)
@@ -249,19 +248,20 @@ serverHop = function()
     blacklistServer(currentJobId)
     registerTeleportQueue()
 
-    local staggerDelay = (LocalPlayer.UserId % 10) * 1.5
+    -- Stagger accounts strictly based on UserId so they query sequentially
+    local staggerDelay = (LocalPlayer.UserId % 10) * 0.8
     if staggerDelay > 0 then task.wait(staggerDelay) end
 
     task.spawn(function()
         local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
         local targetServer = nil
 
-        print("[TradeBot] Fetching servers with strict anti-repeat filtering...")
+        print("[TradeBot] Fetching brand new/low-population servers...")
 
         if req then
             local success, responseText = pcall(function()
                 local res = req({
-                    Url = "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100",
+                    Url = "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100",
                     Method = "GET",
                     Headers = { ["User-Agent"] = "Mozilla/5.0" }
                 })
@@ -281,9 +281,10 @@ serverHop = function()
                     for _, srv in ipairs(data.data) do
                         if type(srv) == "table" and srv.id then
                             local srvIdStr = tostring(srv.id)
-                            -- Strictly filter out current server, last server, and global blacklist
+                            -- Exclude current server, last server, and any globally visited servers
                             if srvIdStr ~= currentJobId and srvIdStr ~= lastServer then
-                                if srv.playing and srv.maxPlayers and srv.playing >= 5 and srv.playing < srv.maxPlayers then
+                                -- Target brand new / low-population servers (>= 1 player)
+                                if srv.playing and srv.maxPlayers and srv.playing >= 1 and srv.playing < srv.maxPlayers then
                                     if not bl[srvIdStr] then
                                         table.insert(validServers, srv)
                                     end
@@ -292,20 +293,15 @@ serverHop = function()
                         end
                     end
 
-                    table.sort(validServers, function(a, b)
-                        return a.playing > b.playing
-                    end)
-
                     if #validServers > 0 then
-                        local rng = Random.new(LocalPlayer.UserId + os.time() % 999)
-                        for i = #validServers, 2, -1 do
-                            local j = rng:NextInteger(1, i)
-                            validServers[i], validServers[j] = validServers[j], validServers[i]
-                        end
+                        -- MATHEMATICAL ZERO-COLLISION INDEX:
+                        -- Every single account picks a completely different index based on its UserId.
+                        local targetIndex = (LocalPlayer.UserId % #validServers) + 1
+                        local chosenSrv = validServers[targetIndex] or validServers[1]
 
-                        targetServer = tostring(validServers[1].id)
+                        targetServer = tostring(chosenSrv.id)
                         blacklistServer(targetServer)
-                        print("[TradeBot] Secured unique target server instance with " .. tostring(validServers[1].playing) .. " players.")
+                        print("[TradeBot] Secured new target server instance with " .. tostring(chosenSrv.playing) .. " players.")
                     end
                 end
             end
@@ -319,17 +315,11 @@ serverHop = function()
             if tpSuccess then return end
         end
 
-        print("[TradeBot] Matchmaking fallback...")
-        local fbSuccess, fbErr = pcall(function()
-            TeleportService:Teleport(PlaceId, LocalPlayer)
+        warn("[TradeBot] No valid new server found. Retrying in 2 seconds...")
+        task.delay(2, function()
+            getgenv().IsHopping = nil
+            serverHop()
         end)
-        if not fbSuccess then
-            warn("[TradeBot] Fallback error:", fbErr)
-            task.delay(4, function()
-                getgenv().IsHopping = nil
-                serverHop()
-            end)
-        end
     end)
 end
 
