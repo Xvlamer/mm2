@@ -70,8 +70,17 @@ local function blacklistServer(jobId)
     saveBlacklist(list)
 end
 
--- Instantly blacklist the current server so we never join it again
-blacklistServer(game.JobId)
+-- ==========================================
+-- INSTANT DUPLICATE SERVER DETECTION
+-- ==========================================
+local blacklist = getBlacklist()
+local isDuplicateServer = false
+
+if blacklist[tostring(game.JobId)] and (os.time() - blacklist[tostring(game.JobId)]) < 3600 then
+    isDuplicateServer = true
+else
+    blacklistServer(game.JobId)
+end
 
 pcall(function()
     if syn and syn.protect_gui then
@@ -139,7 +148,7 @@ local function isTradeActive()
 end
 
 -- ==========================================
--- STRICT SERVER HOP (No random teleports)
+-- LIGHTNING FAST SERVER HOP (No 15s delays)
 -- ==========================================
 local function serverHop()
     if getgenv().IsHopping then return end
@@ -155,31 +164,22 @@ local function serverHop()
     task.spawn(function()
         local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
         local targetServer = nil
-        local cursor = ""
 
-        print("[TradeBot] Initiating STRICT server hop sequence...")
+        print("[TradeBot] Initiating fast server hop...")
 
-        while not targetServer do
-            local bl = getBlacklist()
-            local url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100"
-            if cursor ~= "" then
-                url = url .. "&cursor=" .. cursor
-            end
-
+        if req then
             local success, responseText = pcall(function()
-                if not req then error("No request function") end
-                local res = req({Url = url, Method = "GET"})
-                local code = res and (res.StatusCode or res.status_code) or 0
-                if code == 200 then
+                local res = req({Url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100", Method = "GET"})
+                if res and (res.StatusCode == 200 or res.status_code == 200) then
                     return res.Body or res.body
-                else
-                    error("HTTP Code: " .. tostring(code))
                 end
+                error("Proxy failed")
             end)
 
             if success and responseText then
                 local ok, data = pcall(function() return HttpService:JSONDecode(responseText) end)
                 if ok and data and data.data then
+                    local bl = getBlacklist()
                     local validServers = {}
                     for _, srv in ipairs(data.data) do
                         if type(srv) == "table" and srv.id and tostring(srv.id) ~= tostring(game.JobId) then
@@ -190,35 +190,42 @@ local function serverHop()
                             end
                         end
                     end
-                    
                     if #validServers > 0 then
                         targetServer = validServers[math.random(1, #validServers)]
-                    elseif data.nextPageCursor and data.nextPageCursor ~= "" then
-                        cursor = data.nextPageCursor
                     end
                 end
-            else
-                warn("[TradeBot] Proxy blocked (403) or failed. Backing off for 15 seconds to bypass rate-limit...")
-                -- Instead of random teleporting, we WAIT for the proxy to unblock us
-                task.wait(15) 
-            end
-            
-            if not targetServer then
-                task.wait(1.5)
             end
         end
 
         if targetServer then
             blacklistServer(targetServer)
-            print("[TradeBot] Teleporting to STRICTLY NEW server ID:", targetServer)
-            while task.wait(3) do
+            print("[TradeBot] Teleporting to specific server:", targetServer)
+            while task.wait(1.5) do
                 pcall(function()
                     TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
+                end)
+            end
+        else
+            -- Instant fallback with zero waiting if proxy blocks us
+            print("[TradeBot] Proxy unavailable. Instantly shifting to Roblox matchmaking...")
+            while task.wait(1.5) do
+                pcall(function()
+                    TeleportService:Teleport(PlaceId, LocalPlayer)
                 end)
             end
         end
     end)
 end
+
+-- ==========================================
+-- INTERCEPT DUPLICATE SERVER INSTANTLY
+-- ==========================================
+if isDuplicateServer then
+    print("[TradeBot] Hit a duplicate server! Bouncing instantly...")
+    task.spawn(serverHop)
+    while true do task.wait(1) end
+end
+-- ==========================================
 
 local function evaluateAltDominance()
     pcall(function()
