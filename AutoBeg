@@ -148,7 +148,7 @@ local function isTradeActive()
 end
 
 -- ==========================================
--- BULLETPROOF NON-BLOCKING SERVER HOP
+-- BULLETPROOF ERROR-769 SAFE SERVER HOP
 -- ==========================================
 local function serverHop()
     if getgenv().IsHopping then return end
@@ -220,18 +220,34 @@ local function serverHop()
 
         if targetServer then
             blacklistServer(targetServer)
-            print("[TradeBot] Successfully secured fresh unique server:", targetServer)
-            while task.wait(1) do
-                pcall(function()
-                    TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
-                end)
+            print("[TradeBot] Attempting teleport to server:", targetServer)
+            
+            local tpSuccess, tpErr = pcall(function()
+                TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
+            end)
+
+            if not tpSuccess then
+                warn("[TradeBot] Teleport instance failed (Error 769/Full/Dead). Retrying search...", tpErr)
+                blacklistServer(targetServer)
+                getgenv().IsHopping = false
+                task.wait(1)
+                serverHop()
+            else
+                while task.wait(1) do
+                    pcall(function()
+                        TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
+                    end)
+                end
             end
         else
-            print("[TradeBot] API limit reached. Forcing fallback teleport...")
-            while task.wait(1) do
-                pcall(function()
-                    TeleportService:Teleport(PlaceId, LocalPlayer)
-                end)
+            print("[TradeBot] API limit reached. Forcing fallback matchmaking...")
+            local fbSuccess = pcall(function()
+                TeleportService:Teleport(PlaceId, LocalPlayer)
+            end)
+            if not fbSuccess then
+                getgenv().IsHopping = false
+                task.wait(2)
+                serverHop()
             end
         end
     end)
