@@ -144,18 +144,29 @@ local function serverHop()
     if staggerDelay > 0 then task.wait(staggerDelay) end
 
     task.spawn(function()
-        local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
         local targetServer = nil
         local cursor = ""
         local fetchAttempts = 0
+        local allCollectedServers = {}
+
+        print("[TradeBot] Starting server search...")
 
         while not targetServer do
             fetchAttempts = fetchAttempts + 1
             
-            if fetchAttempts > 25 then
-                cursor = ""
-                fetchAttempts = 0
-                task.wait(3)
+            if fetchAttempts > 15 then
+                if #allCollectedServers > 0 then
+                    table.sort(allCollectedServers, function(a, b)
+                        return (a.time or 0) < (b.time or 0)
+                    end)
+                    targetServer = allCollectedServers[1].id
+                    print("[TradeBot] Fallback: Picking oldest collected server:", targetServer)
+                    break
+                else
+                    cursor = ""
+                    fetchAttempts = 0
+                    task.wait(2)
+                end
             end
 
             local blacklist = getBlacklist()
@@ -165,49 +176,41 @@ local function serverHop()
             end
 
             local success, responseText = pcall(function()
-                if req then
-                    local res = req({
-                        Url = url,
-                        Method = "GET",
-                        headers = {
-                            ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                            ["Accept"] = "application/json"
-                        },
-                        Headers = {
-                            ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                            ["Accept"] = "application/json"
-                        }
-                    })
-                    if res then
-                        local code = res.StatusCode or res.status_code
-                        local body = res.Body or res.body
-                        if code == 200 and body then return body end
-                    end
-                end
-                return nil
+                return game:HttpGet(url)
             end)
 
             if success and responseText then
-                local ok, data = pcall(HttpService.JSONDecode, HttpService, responseText)
+                local ok, data = pcall(function()
+                    return HttpService:JSONDecode(responseText)
+                end)
+                
                 if ok and data and data.data then
                     local validServers = {}
                     for _, srv in ipairs(data.data) do
                         if type(srv) == "table" and srv.id and tostring(srv.id) ~= tostring(game.JobId) then
                             local idStr = tostring(srv.id)
-                            if not blacklist[idStr] then
-                                if srv.playing and srv.maxPlayers and srv.playing < srv.maxPlayers then
+                            if srv.playing and srv.maxPlayers and srv.playing < srv.maxPlayers then
+                                local visitTime = blacklist[idStr]
+                                table.insert(allCollectedServers, { id = idStr, time = visitTime or 0 })
+                                if not visitTime then
                                     table.insert(validServers, idStr)
                                 end
                             end
                         end
                     end
+                    
                     if #validServers > 0 then
                         targetServer = validServers[math.random(1, #validServers)]
-                    end
-                    
-                    if not targetServer then
-                        if data.nextPageCursor and data.nextPageCursor ~= "" then
-                            cursor = data.nextPageCursor
+                        print("[TradeBot] Found fresh unvisited server:", targetServer)
+                    elseif data.nextPageCursor and data.nextPageCursor ~= "" then
+                        cursor = data.nextPageCursor
+                    else
+                        if #allCollectedServers > 0 then
+                            table.sort(allCollectedServers, function(a, b)
+                                return (a.time or 0) < (b.time or 0)
+                            end)
+                            targetServer = allCollectedServers[1].id
+                            print("[TradeBot] Reached end of pages, selecting oldest server:", targetServer)
                         else
                             cursor = ""
                             task.wait(2)
@@ -215,15 +218,17 @@ local function serverHop()
                     end
                 end
             else
+                warn("[TradeBot] Failed to fetch server list via HttpGet, retrying...")
                 task.wait(2)
             end
             
             if not targetServer then
-                task.wait(1)
+                task.wait(0.5)
             end
         end
 
         blacklistServer(targetServer)
+        print("[TradeBot] Teleporting to target server:", targetServer)
 
         local tpSuccess = false
         local attempts = 0
@@ -240,6 +245,7 @@ local function serverHop()
         end
 
         if not tpSuccess then
+            warn("[TradeBot] Teleport failed, retrying server hop...")
             getgenv().IsHopping = false
             task.wait(3)
             serverHop()
