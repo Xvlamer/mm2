@@ -9,12 +9,10 @@ pcall(function()
     settings().Rendering.QualityLevel = 1
     settings().Physics.AllowSleep = false
     if setfpscap then setfpscap(60) end
-    print("[TradeBot Debug] Performance settings applied.")
 end)
 
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
-print("[TradeBot Debug] LocalPlayer loaded:", LocalPlayer.Name)
 
 local VirtualUser = game:GetService("VirtualUser")
 LocalPlayer.Idled:Connect(function()
@@ -27,7 +25,6 @@ end)
 while not game.JobId or game.JobId == "" do
     task.wait(0.1)
 end
-print("[TradeBot Debug] Game JobId verified:", game.JobId)
 
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
@@ -44,7 +41,6 @@ local BlacklistFile = FolderName .. "/VisitedServers_" .. tostring(LocalPlayer.U
 pcall(function()
     if not isfolder(FolderName) then
         makefolder(FolderName)
-        print("[TradeBot Debug] Created folder:", FolderName)
     end
 end)
 
@@ -57,7 +53,6 @@ local function getBlacklist()
             return decoded
         end
     end
-    warn("[TradeBot Debug] Failed to decode blacklist JSON.")
     return {}
 end
 
@@ -86,13 +81,11 @@ pcall(function()
         holder.ResetOnSpawn = false
         syn.protect_gui(holder)
         holder.Parent = CoreGui
-        print("[TradeBot Debug] Protected GUI via Synapse.")
     elseif gethui then
         local holder = Instance.new("ScreenGui")
         holder.Name = "AutoExecHolder"
         holder.ResetOnSpawn = false
         holder.Parent = gethui()
-        print("[TradeBot Debug] Protected GUI via gethui().")
     end
 end)
 
@@ -114,9 +107,6 @@ local function registerTeleportQueue()
     pcall(function()
         if queue_on_teleport then
             queue_on_teleport(getAutoExecCode())
-            print("[TradeBot Debug] Teleport queue registered successfully.")
-        else
-            warn("[TradeBot Debug] queue_on_teleport is not supported by this executor!")
         end
     end)
 end
@@ -125,18 +115,13 @@ registerTeleportQueue()
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui", 60)
-if not PlayerGui then 
-    warn("[TradeBot Debug] PlayerGui failed to load!")
-    return 
-end
-print("[TradeBot Debug] PlayerGui loaded.")
+if not PlayerGui then return end
 
 local altNumber = 1
 pcall(function()
     local numStr = string.match(LocalPlayer.Name, "%d+$")
     if numStr then altNumber = tonumber(numStr) or 1 end
 end)
-print("[TradeBot Debug] Alt number detected:", altNumber)
 
 local WebhookURL = "https://discord.com/api/webhooks/1532552103334117656/DD1kP_4rNJ1nogFfThaVNAqhpktEhZ9qQDijMbAmFzBjJFDBmfduj3FIdtEmNaqBAmdS"
 
@@ -156,24 +141,15 @@ end
 
 local function serverHop()
     print("[TradeBot Debug] serverHop() invoked.")
-    if getgenv().IsHopping then 
-        warn("[TradeBot Debug] serverHop aborted: Already hopping process underway.")
-        return 
-    end
-    if isTradeActive() then 
-        warn("[TradeBot Debug] serverHop aborted: Active trade window is open.")
-        return 
-    end
+    if getgenv().IsHopping then return end
+    if isTradeActive() then return end
 
     getgenv().IsHopping = true
     blacklistServer(tostring(game.JobId))
     registerTeleportQueue()
 
     local staggerDelay = (altNumber - 1) * 1.5
-    if staggerDelay > 0 then 
-        print("[TradeBot Debug] Staggering alt hop by", staggerDelay, "seconds.")
-        task.wait(staggerDelay) 
-    end
+    if staggerDelay > 0 then task.wait(staggerDelay) end
 
     task.spawn(function()
         local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
@@ -199,7 +175,13 @@ local function serverHop()
 
             local success, responseText = pcall(function()
                 if req then
-                    local res = req({Url = url, Method = "GET"})
+                    local res = req({
+                        Url = url,
+                        Method = "GET",
+                        Headers = {
+                            ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                        }
+                    })
                     if res then
                         local code = res.StatusCode or res.status_code
                         local body = res.Body or res.body
@@ -207,7 +189,6 @@ local function serverHop()
                         if code == 200 and body then return body end
                     end
                 end
-                print("[TradeBot Debug] Falling back to game:HttpGet for server list.")
                 return game:HttpGet(url)
             end)
 
@@ -234,11 +215,10 @@ local function serverHop()
                     warn("[TradeBot Debug] Failed to decode server list JSON from response.")
                 end
             else
-                warn("[TradeBot Debug] HTTP request for server list failed entirely. Success:", success)
+                warn("[TradeBot Debug] HTTP request failed entirely.")
             end
             
             if not targetServer then
-                print("[TradeBot Debug] No target server found yet, retrying in 2 seconds...")
                 task.wait(2)
             end
         end
@@ -249,21 +229,17 @@ local function serverHop()
         local attempts = 0
         while not tpSuccess and attempts < 3 do
             attempts = attempts + 1
-            print("[TradeBot Debug] Teleporting to instance attempt:", attempts)
             local ok, err = pcall(function()
                 TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
             end)
             if ok then
                 tpSuccess = true
-                print("[TradeBot Debug] TeleportToPlaceInstance executed successfully.")
             else
-                warn("[TradeBot Debug] TeleportToPlaceInstance failed:", err)
                 task.wait(2)
             end
         end
 
         if not tpSuccess then
-            warn("[TradeBot Debug] All instance teleport attempts failed! Forcing standard Teleport().")
             pcall(function()
                 TeleportService:Teleport(PlaceId, LocalPlayer)
             end)
@@ -280,7 +256,6 @@ local function evaluateAltDominance()
             if player ~= LocalPlayer and string.match(player.Name, "^Xvlamer%d+$") then
                 local otherAltNum = tonumber(string.match(player.Name, "%d+$")) or 1
                 if otherAltNum < altNumber then
-                    print("[TradeBot Debug] Alt dominance detected lower alt number present. Triggering server hop.")
                     serverHop()
                     break
                 end
@@ -307,7 +282,6 @@ local thankMessages = {"thanks bro", "yo tysm", "tysm man", "yoo thanks bro"}
 
 local function sendMessage(msg)
     pcall(function()
-        print("[TradeBot Debug] Sending chat message:", msg)
         if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
             local channels = TextChatService:FindFirstChild("TextChannels")
             if channels then
@@ -345,10 +319,7 @@ local function checkDangerWords(text)
     local lowerText = string.lower(text)
     local words = {"bot", "ai", "report", "ban", "scam", "hacker", "hack", "automated", "automation", "macro", "autoclicker", "alt", "detector", "exploiter", "exploit", "cheater", "cheat", "botting", "moderator", "mod", "admin"}
     for _, word in ipairs(words) do
-        if string.find(lowerText, word) then 
-            print("[TradeBot Debug] Danger word detected in chat:", word)
-            return true 
-        end
+        if string.find(lowerText, word) then return true end
     end
     return false
 end
@@ -367,12 +338,8 @@ local lastTradeResponseTime = 0
 local function setupChatListener()
     local function processMsg(senderId, msgText)
         if senderId == LocalPlayer.UserId then return end
-        print("[TradeBot Debug] Chat received from user ID", senderId, ":", msgText)
         if checkDangerWords(msgText) then
-            if not isTradeActive() then 
-                print("[TradeBot Debug] Danger word matched. Triggering server hop.")
-                serverHop() 
-            end
+            if not isTradeActive() then serverHop() end
             return
         end
         if isValidTradeResponse(msgText) then
@@ -406,7 +373,6 @@ local function setupChatListener()
             Players.PlayerAdded:Connect(attachPlayerChat)
         end
     end)
-    print("[TradeBot Debug] Chat listener initialized.")
 end
 setupChatListener()
 
@@ -491,10 +457,7 @@ local function processWebhookQueue()
                 if mentionsEveryone then payload["content"] = "@everyone" end
                 pcall(function()
                     local req = request or http_request or (syn and syn.request) or (fluxus and fluxus.request)
-                    if req then 
-                        print("[TradeBot Debug] Dispatching webhook notification.")
-                        req({Url = WebhookURL, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = HttpService:JSONEncode(payload)}) 
-                    end
+                    if req then req({Url = WebhookURL, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = HttpService:JSONEncode(payload)}) end
                 end)
             end
             task.wait(1.5)
@@ -517,13 +480,11 @@ task.spawn(function()
             if not inventoryInitialized then
                 for k, v in pairs(currentItems) do baselineInventory[k] = v.Amount end
                 inventoryInitialized = true
-                print("[TradeBot Debug] Inventory baseline initialized. Total items tracked:", table.sumnums and 0 or "OK")
             else
                 local gainedAny = false
                 for k, v in pairs(currentItems) do
                     local oldAmount = baselineInventory[k] or 0
                     if v.Amount > oldAmount then
-                        print("[TradeBot Debug] Inventory gain detected for item:", v.Name, "Gained:", v.Amount - oldAmount)
                         baselineInventory[k] = v.Amount
                         table.insert(WebhookQueue, { Item = v, Gained = v.Amount - oldAmount })
                         processWebhookQueue()
@@ -570,10 +531,7 @@ task.spawn(function()
             local tradeReq = PlayerGui:FindFirstChild("MainGUI") and (PlayerGui.MainGUI:FindFirstChild("Main") or PlayerGui.MainGUI:FindFirstChild("Game"))
             tradeReq = tradeReq and tradeReq:FindFirstChild("Leaderboard") and tradeReq.Leaderboard:FindFirstChild("Container") and tradeReq.Leaderboard.Container:FindFirstChild("TradeRequest")
             local acceptReqBtn = tradeReq and tradeReq:FindFirstChild("ReceivingRequest") and tradeReq.ReceivingRequest:FindFirstChild("Accept")
-            if acceptReqBtn and acceptReqBtn.Visible then 
-                print("[TradeBot Debug] Incoming trade request detected and accepted.")
-                fireGuiButton(acceptReqBtn) 
-            end
+            if acceptReqBtn and acceptReqBtn.Visible then fireGuiButton(acceptReqBtn) end
         end)
     end
 end)
@@ -587,7 +545,6 @@ task.spawn(function()
             if not wasTradeOpen then
                 tradeOpenTime = tick()
                 wasTradeOpen = true
-                print("[TradeBot Debug] Trade interface opened.")
             end
             if tick() - tradeOpenTime >= 2.5 then
                 pcall(function()
@@ -595,10 +552,7 @@ task.spawn(function()
                     if acceptFolder then
                         if acceptFolder:FindFirstChild("Cancel") and acceptFolder.Cancel:FindFirstChild("ActionButton") then acceptFolder.Cancel.ActionButton:Destroy() end
                         if acceptFolder:FindFirstChild("ActionButton") and acceptFolder.ActionButton.Visible then fireGuiButton(acceptFolder.ActionButton) end
-                        if acceptFolder:FindFirstChild("Confirm") and acceptFolder.Confirm:FindFirstChild("ActionButton") and acceptFolder.Confirm.ActionButton.Visible then 
-                            print("[TradeBot Debug] Confirming active trade window.")
-                            fireGuiButton(acceptFolder.Confirm.ActionButton) 
-                        end
+                        if acceptFolder:FindFirstChild("Confirm") and acceptFolder.Confirm:FindFirstChild("ActionButton") and acceptFolder.Confirm.ActionButton.Visible then fireGuiButton(acceptFolder.Confirm.ActionButton) end
                     end
                 end)
             end
@@ -665,18 +619,15 @@ task.spawn(function()
                 wasTrading = false
                 tradeEndedTime = tick()
                 hasThankedThisTrade = false
-                print("[TradeBot Debug] Trade session ended.")
             end
 
             if hasTradedInServer then
                 if tick() - tradeEndedTime >= 10 then
-                    print("[TradeBot Debug] Post-trade delay expired. Triggering server hop.")
                     serverHop()
                     return 
                 end
             else
                 if tick() - joinTime >= 60 then
-                    print("[TradeBot Debug] Server join timeout (60s) reached with no trades. Triggering server hop.")
                     serverHop()
                     return 
                 end
