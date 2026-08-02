@@ -68,7 +68,6 @@ local function blacklistServer(jobId)
             end
         end
         writefile(BlacklistFile, HttpService:JSONEncode(list))
-        print("[TradeBot Debug] Blacklisted server JobId:", jobId)
     end)
 end
 
@@ -140,7 +139,6 @@ local function isTradeActive()
 end
 
 local function serverHop()
-    print("[TradeBot Debug] serverHop() invoked.")
     if getgenv().IsHopping then return end
     if isTradeActive() then return end
 
@@ -158,10 +156,8 @@ local function serverHop()
 
         while not targetServer do
             fetchAttempts = fetchAttempts + 1
-            print("[TradeBot Debug] Fetching servers attempt:", fetchAttempts)
             
             if fetchAttempts > 6 then
-                warn("[TradeBot Debug] API fetch attempts exceeded limit! Forcing Roblox standard Teleport().")
                 pcall(function()
                     TeleportService:Teleport(PlaceId, LocalPlayer)
                 end)
@@ -178,18 +174,22 @@ local function serverHop()
                     local res = req({
                         Url = url,
                         Method = "GET",
+                        headers = {
+                            ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                            ["Accept"] = "application/json"
+                        },
                         Headers = {
-                            ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                            ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                            ["Accept"] = "application/json"
                         }
                     })
                     if res then
                         local code = res.StatusCode or res.status_code
                         local body = res.Body or res.body
-                        print("[TradeBot Debug] RoProxy HTTP Status Code:", code)
                         if code == 200 and body then return body end
                     end
                 end
-                return game:HttpGet(url)
+                return nil
             end)
 
             if success and responseText then
@@ -206,16 +206,10 @@ local function serverHop()
                             end
                         end
                     end
-                    print("[TradeBot Debug] Valid servers found:", #validServers)
                     if #validServers > 0 then
                         targetServer = validServers[math.random(1, #validServers)]
-                        print("[TradeBot Debug] Selected target server ID:", targetServer)
                     end
-                else
-                    warn("[TradeBot Debug] Failed to decode server list JSON from response.")
                 end
-            else
-                warn("[TradeBot Debug] HTTP request failed entirely.")
             end
             
             if not targetServer then
@@ -229,7 +223,7 @@ local function serverHop()
         local attempts = 0
         while not tpSuccess and attempts < 3 do
             attempts = attempts + 1
-            local ok, err = pcall(function()
+            local ok = pcall(function()
                 TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
             end)
             if ok then
