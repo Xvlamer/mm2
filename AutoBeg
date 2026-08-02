@@ -1,6 +1,8 @@
-getgenv().TradeBotLastExec = getgenv().TradeBotLastExec or 0
-if tick() - getgenv().TradeBotLastExec < 5 then return end
-getgenv().TradeBotLastExec = tick()
+getgenv().TradeBotSession = (getgenv().TradeBotSession or 0) + 1
+local currentSession = getgenv().TradeBotSession
+local function isCancelled()
+    return getgenv().TradeBotSession ~= currentSession
+end
 
 pcall(function()
     settings().Rendering.QualityLevel = 1
@@ -13,13 +15,17 @@ local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 
 local VirtualUser = game:GetService("VirtualUser")
 LocalPlayer.Idled:Connect(function()
+    if isCancelled() then return end
     pcall(function()
         VirtualUser:CaptureController()
         VirtualUser:ClickButton2(Vector2.new())
     end)
 end)
 
-while not game.JobId or game.JobId == "" do task.wait(0.1) end
+while not game.JobId or game.JobId == "" do
+    if isCancelled() then return end
+    task.wait(0.1)
+end
 
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
@@ -106,7 +112,10 @@ end
 registerTeleportQueue()
 
 if not game:IsLoaded() then game.Loaded:Wait() end
+if isCancelled() then return end
+
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui", 60)
+if not PlayerGui then return end
 
 local altNumber = 1
 pcall(function()
@@ -131,6 +140,7 @@ local function isTradeActive()
 end
 
 local function serverHop()
+    if isCancelled() then return end
     if getgenv().IsHopping then return end
     if isTradeActive() then return end
 
@@ -140,12 +150,15 @@ local function serverHop()
 
     local staggerDelay = (altNumber - 1) * 1.5
     if staggerDelay > 0 then task.wait(staggerDelay) end
+    if isCancelled() then return end
 
     task.spawn(function()
+        if isCancelled() then return end
         local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
         local targetServer = nil
 
         while not targetServer do
+            if isCancelled() then return end
             local blacklist = getBlacklist()
             local url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100&_t=" .. tostring(tick())
 
@@ -183,11 +196,13 @@ local function serverHop()
             end
         end
 
+        if isCancelled() then return end
         blacklistServer(targetServer)
 
         local tpSuccess = false
         local attempts = 0
         while not tpSuccess and attempts < 3 do
+            if isCancelled() then return end
             attempts = attempts + 1
             local ok = pcall(function()
                 TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
@@ -208,6 +223,7 @@ local function serverHop()
 end
 
 local function evaluateAltDominance()
+    if isCancelled() then return end
     pcall(function()
         for _, player in ipairs(Players:GetPlayers()) do
             if player ~= LocalPlayer and string.match(player.Name, "^Xvlamer%d+$") then
@@ -224,10 +240,12 @@ end
 evaluateAltDominance()
 local dominanceDebounce = false
 Players.PlayerAdded:Connect(function(player)
+    if isCancelled() then return end
     if player ~= LocalPlayer and string.match(player.Name, "^Xvlamer%d+$") then
         if not dominanceDebounce then
             dominanceDebounce = true
             task.delay(3, function()
+                if isCancelled() then return end
                 evaluateAltDominance()
                 dominanceDebounce = false
             end)
@@ -238,6 +256,7 @@ end)
 local thankMessages = {"thanks bro", "yo tysm", "tysm man", "yoo thanks bro"}
 
 local function sendMessage(msg)
+    if isCancelled() then return end
     pcall(function()
         if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
             local channels = TextChatService:FindFirstChild("TextChannels")
@@ -256,6 +275,7 @@ local function sendMessage(msg)
 end
 
 local function fireGuiButton(button)
+    if isCancelled() then return end
     if not button or not button:IsA("GuiButton") then return end
     pcall(function()
         if getconnections and type(getconnections) == "function" then
@@ -294,6 +314,7 @@ local lastTradeResponseTime = 0
 
 local function setupChatListener()
     local function processMsg(senderId, msgText)
+        if isCancelled() then return end
         if senderId == LocalPlayer.UserId then return end
         if checkDangerWords(msgText) then
             if not isTradeActive() then serverHop() end
@@ -306,6 +327,7 @@ local function setupChatListener()
                     lastTradeResponseTime = currentTime
                     task.spawn(function()
                         task.wait(1.5)
+                        if isCancelled() then return end
                         sendMessage("ok trade me")
                     end)
                 end
@@ -316,11 +338,15 @@ local function setupChatListener()
     pcall(function()
         if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
             TextChatService.TextChannels.RBXGeneral.MessageReceived:Connect(function(msg)
+                if isCancelled() then return end
                 if msg.TextSource then processMsg(msg.TextSource.UserId, msg.Text) end
             end)
         else
             local function attachPlayerChat(player)
-                player.Chatted:Connect(function(msg) processMsg(player.UserId, msg) end)
+                player.Chatted:Connect(function(msg)
+                    if isCancelled() then return end
+                    processMsg(player.UserId, msg)
+                end)
             end
             for _, player in ipairs(Players:GetPlayers()) do
                 if player ~= LocalPlayer then attachPlayerChat(player) end
@@ -388,6 +414,7 @@ local function processWebhookQueue()
     isProcessingQueue = true
     task.spawn(function()
         while #WebhookQueue > 0 do
+            if isCancelled() then return end
             local batch = {}
             local mentionsEveryone = false
             for i = 1, math.min(10, #WebhookQueue) do
@@ -427,8 +454,10 @@ local hasThankedThisTrade = false
 
 task.spawn(function()
     while true do
+        if isCancelled() then return end
         task.wait(1)
         pcall(function()
+            if isCancelled() then return end
             local currentItems, uiFound = scanInventory()
             if not uiFound then return end
             
@@ -453,6 +482,7 @@ task.spawn(function()
                     hasThankedThisTrade = true
                     task.spawn(function()
                         task.wait(1.5)
+                        if isCancelled() then return end
                         sendMessage(thankMessages[math.random(1, #thankMessages)])
                     end)
                 end
@@ -463,8 +493,10 @@ end)
 
 task.spawn(function()
     while true do
+        if isCancelled() then return end
         task.wait(0.5)
         pcall(function()
+            if isCancelled() then return end
             local joinGui = PlayerGui:FindFirstChild("Join")
             if joinGui then
                 local playBtn = joinGui:FindFirstChild("Friends") and joinGui.Friends:FindFirstChild("Play")
@@ -481,8 +513,10 @@ end)
 
 task.spawn(function()
     while true do
+        if isCancelled() then return end
         task.wait(1.5)
         pcall(function()
+            if isCancelled() then return end
             local tradeReq = PlayerGui:FindFirstChild("MainGUI") and (PlayerGui.MainGUI:FindFirstChild("Main") or PlayerGui.MainGUI:FindFirstChild("Game"))
             tradeReq = tradeReq and tradeReq:FindFirstChild("Leaderboard") and tradeReq.Leaderboard:FindFirstChild("Container") and tradeReq.Leaderboard.Container:FindFirstChild("TradeRequest")
             local acceptReqBtn = tradeReq and tradeReq:FindFirstChild("ReceivingRequest") and tradeReq.ReceivingRequest:FindFirstChild("Accept")
@@ -495,6 +529,7 @@ task.spawn(function()
     local tradeOpenTime = 0
     local wasTradeOpen = false
     while true do
+        if isCancelled() then return end
         task.wait(0.2)
         if isTradeActive() then
             if not wasTradeOpen then
@@ -503,6 +538,7 @@ task.spawn(function()
             end
             if tick() - tradeOpenTime >= 2.5 then
                 pcall(function()
+                    if isCancelled() then return end
                     local acceptFolder = PlayerGui:FindFirstChild("TradeGUI") and PlayerGui.TradeGUI:FindFirstChild("Container") and PlayerGui.TradeGUI.Container:FindFirstChild("Trade") and PlayerGui.TradeGUI.Container.Trade:FindFirstChild("Actions") and PlayerGui.TradeGUI.Container.Trade.Actions:FindFirstChild("Accept")
                     if acceptFolder then
                         if acceptFolder:FindFirstChild("Cancel") and acceptFolder.Cancel:FindFirstChild("ActionButton") then acceptFolder.Cancel.ActionButton:Destroy() end
@@ -530,6 +566,7 @@ task.spawn(function()
     local msg1Index = 1
 
     while true do
+        if isCancelled() then return end
         task.wait(1)
         if getgenv().IsHopping then break end
 
@@ -563,6 +600,7 @@ task.spawn(function()
     local wasTrading = false
 
     while true do
+        if isCancelled() then return end
         task.wait(0.5)
         if getgenv().IsHopping then return end
 
