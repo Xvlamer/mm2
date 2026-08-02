@@ -1,4 +1,5 @@
-if getgenv().TradeBotExecuted == game.JobId then return end
+if getgenv().TradeBotExecuted == game.JobId or getgenv().TradeBotLock == game.JobId then return end
+getgenv().TradeBotLock = game.JobId
 
 pcall(function()
     settings().Rendering.QualityLevel = 1
@@ -19,7 +20,6 @@ end)
 
 repeat task.wait(0.1) until game.JobId and game.JobId ~= ""
 getgenv().TradeBotExecuted = game.JobId
-getgenv().IsHopping = false
 
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
@@ -94,13 +94,6 @@ local function getAutoExecCode()
         end)
     ]], RawScriptURL)
 end
-
-pcall(function()
-    if writefile then
-        if not isfolder("autoexec") then makefolder("autoexec") end
-        writefile("autoexec/TradeBot_AutoLoader.lua", getAutoExecCode())
-    end
-end)
 
 local function registerTeleportQueue()
     pcall(function()
