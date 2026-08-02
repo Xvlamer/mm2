@@ -53,7 +53,14 @@ local function getBlacklist()
     if success and content then
         local ok, decoded = pcall(HttpService.JSONDecode, HttpService, content)
         if ok and type(decoded) == "table" then
-            return decoded
+            local currentTime = os.time()
+            local cleaned = {}
+            for jobId, timestamp in pairs(decoded) do
+                if type(timestamp) == "number" and (currentTime - timestamp) < 3600 then
+                    cleaned[jobId] = timestamp
+                end
+            end
+            return cleaned
         end
     end
     return {}
@@ -99,11 +106,12 @@ registerTeleportQueue()
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 -- ==========================================
--- INSTANT STARTUP BLACKLIST CHECK
+-- INSTANT STARTUP BLACKLIST CHECK (WITH TIME EXPIRY)
 -- ==========================================
 local startupBlacklist = getBlacklist()
-if startupBlacklist[tostring(game.JobId)] then
-    print("[TradeBot] Current server found in blacklist on startup! Bouncing instantly...")
+local currentJobIdStr = tostring(game.JobId)
+if startupBlacklist[currentJobIdStr] and (os.time() - startupBlacklist[currentJobIdStr]) < 3600 then
+    print("[TradeBot] Current server is recently blacklisted! Bouncing instantly...")
     registerTeleportQueue()
     task.spawn(function()
         TeleportService:Teleport(PlaceId, LocalPlayer)
@@ -115,7 +123,7 @@ end
 task.spawn(function()
     task.wait(10)
     if not getgenv().IsHopping then
-        blacklistServer(tostring(game.JobId))
+        blacklistServer(currentJobIdStr)
         print("[TradeBot] Server successfully added to blacklist after 10 seconds.")
     end
 end)
@@ -161,12 +169,8 @@ local function isTradeActive()
     return active
 end
 
--- Forward declaration of serverHop for global event hook
 local serverHop
 
--- ==========================================
--- GLOBAL TELEPORT ERROR CATCHER
--- ==========================================
 TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage, targetJobId)
     if player == LocalPlayer then
         warn("[TradeBot] Teleport failed safely:", errorMessage, "Result:", tostring(teleportResult))
@@ -176,9 +180,6 @@ TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, erro
     end
 end)
 
--- ==========================================
--- BULLETPROOF MATCHMAKING SERVER HOP
--- ==========================================
 serverHop = function()
     if getgenv().IsHopping then return end
     if isTradeActive() then return end
@@ -236,7 +237,6 @@ serverHop = function()
             if tpSuccess then return end
         end
 
-        -- Matchmaking Fallback
         print("[TradeBot] Using standard Roblox matchmaking fallback...")
         local fbSuccess, fbErr = pcall(function()
             TeleportService:Teleport(PlaceId, LocalPlayer)
@@ -524,18 +524,42 @@ task.spawn(function()
     end
 end)
 
+-- ==========================================
+-- ROBUST TRADE REQUEST ACCEPTANCE
+-- ==========================================
 task.spawn(function()
     while true do
-        task.wait(1.5)
+        task.wait(1)
         pcall(function()
-            local tradeReq = PlayerGui:FindFirstChild("MainGUI") and (PlayerGui.MainGUI:FindFirstChild("Main") or PlayerGui.MainGUI:FindFirstChild("Game"))
-            tradeReq = tradeReq and tradeReq:FindFirstChild("Leaderboard") and tradeReq.Leaderboard:FindFirstChild("Container") and tradeReq.Leaderboard.Container:FindFirstChild("TradeRequest")
-            local acceptReqBtn = tradeReq and tradeReq:FindFirstChild("ReceivingRequest") and tradeReq.ReceivingRequest:FindFirstChild("Accept")
-            if acceptReqBtn and acceptReqBtn.Visible then fireGuiButton(acceptReqBtn) end
+            local mainGui = PlayerGui:FindFirstChild("MainGUI")
+            if mainGui then
+                local gameFrame = mainGui:FindFirstChild("Main") or mainGui:FindFirstChild("Game")
+                if gameFrame then
+                    local leaderboard = gameFrame:FindFirstChild("Leaderboard")
+                    if leaderboard then
+                        local container = leaderboard:FindFirstChild("Container")
+                        if container then
+                            local tradeReq = container:FindFirstChild("TradeRequest")
+                            if tradeReq then
+                                local receiving = tradeReq:FindFirstChild("ReceivingRequest")
+                                if receiving then
+                                    local acceptBtn = receiving:FindFirstChild("Accept")
+                                    if acceptBtn and acceptBtn:IsA("GuiButton") and acceptBtn.Visible then
+                                        fireGuiButton(acceptBtn)
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
         end)
     end
 end)
 
+-- ==========================================
+-- ROBUST TRADE WINDOW ACCEPT / CONFIRM
+-- ==========================================
 task.spawn(function()
     local tradeOpenTime = 0
     local wasTradeOpen = false
@@ -546,13 +570,36 @@ task.spawn(function()
                 tradeOpenTime = tick()
                 wasTradeOpen = true
             end
-            if tick() - tradeOpenTime >= 2.5 then
+            if tick() - tradeOpenTime >= 2.0 then
                 pcall(function()
-                    local acceptFolder = PlayerGui:FindFirstChild("TradeGUI") and PlayerGui.TradeGUI:FindFirstChild("Container") and PlayerGui.TradeGUI.Container:FindFirstChild("Trade") and PlayerGui.TradeGUI.Container.Trade:FindFirstChild("Actions") and PlayerGui.TradeGUI.Container.Trade.Actions:FindFirstChild("Accept")
-                    if acceptFolder then
-                        if acceptFolder:FindFirstChild("Cancel") and acceptFolder.Cancel:FindFirstChild("ActionButton") then acceptFolder.Cancel.ActionButton:Destroy() end
-                        if acceptFolder:FindFirstChild("ActionButton") and acceptFolder.ActionButton.Visible then fireGuiButton(acceptFolder.ActionButton) end
-                        if acceptFolder:FindFirstChild("Confirm") and acceptFolder.Confirm:FindFirstChild("ActionButton") and acceptFolder.Confirm.ActionButton.Visible then fireGuiButton(acceptFolder.ActionButton) end
+                    local tradeGui = PlayerGui:FindFirstChild("TradeGUI")
+                    if tradeGui then
+                        local container = tradeGui:FindFirstChild("Container")
+                        if container then
+                            local tradeFrame = container:FindFirstChild("Trade")
+                            if tradeFrame then
+                                local actions = tradeFrame:FindFirstChild("Actions")
+                                if actions then
+                                    local acceptFolder = actions:FindFirstChild("Accept")
+                                    if acceptFolder then
+                                        if acceptFolder:FindFirstChild("Cancel") and acceptFolder.Cancel:FindFirstChild("ActionButton") then
+                                            acceptFolder.Cancel.ActionButton:Destroy()
+                                        end
+                                        local btn = acceptFolder:FindFirstChild("ActionButton")
+                                        if btn and btn:IsA("GuiButton") and btn.Visible then
+                                            fireGuiButton(btn)
+                                        end
+                                        local confirmFolder = acceptFolder:FindFirstChild("Confirm")
+                                        if confirmFolder then
+                                            local confirmBtn = confirmFolder:FindFirstChild("ActionButton")
+                                            if confirmBtn and confirmBtn:IsA("GuiButton") and confirmBtn.Visible then
+                                                fireGuiButton(confirmBtn)
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
                     end
                 end)
             end
