@@ -1,8 +1,9 @@
-if getgenv().TradeBotRunning then
-    warn("[TradeBot Debug] Script already running, aborting duplicate execution.")
+if getgenv().TradeBotRunning and (tick() - (getgenv().TradeBotInitTime or 0)) < 30 then
+    warn("[TradeBot Debug] Script already running recently, aborting duplicate execution.")
     return
 end
 getgenv().TradeBotRunning = true
+getgenv().TradeBotInitTime = tick()
 getgenv().IsHopping = nil
 print("[TradeBot Debug] Script initialized successfully.")
 
@@ -150,6 +151,17 @@ task.spawn(function()
     end
 end)
 
+-- Watchdog to prevent permanent freezeups if a hop fails silently
+task.spawn(function()
+    while true do
+        task.wait(5)
+        if getgenv().IsHopping and (tick() - (getgenv().HopStartTime or tick())) > 15 then
+            warn("[TradeBot] Hop action timed out! Forcing reset on IsHopping.")
+            getgenv().IsHopping = nil
+        end
+    end
+end)
+
 pcall(function()
     if syn and syn.protect_gui then
         local holder = Instance.new("ScreenGui")
@@ -201,10 +213,10 @@ serverHop = function()
     if isTradeActive() then return end
 
     getgenv().IsHopping = true
+    getgenv().HopStartTime = tick()
     blacklistServer(tostring(game.JobId))
     registerTeleportQueue()
 
-    -- Stagger each account uniquely using its UserId to prevent simultaneous API spam
     local staggerDelay = (LocalPlayer.UserId % 10) * 1.2
     if staggerDelay > 0 then task.wait(staggerDelay) end
 
@@ -243,13 +255,11 @@ serverHop = function()
                         end
                     end
 
-                    -- Sort highest player count to lowest
                     table.sort(validServers, function(a, b)
                         return a.playing > b.playing
                     end)
 
                     if #validServers > 0 then
-                        -- Spread across top 10 fullest servers using absolute UserId uniqueness
                         local topPoolSize = math.min(10, #validServers)
                         local targetIndex = (LocalPlayer.UserId % topPoolSize) + 1
                         
