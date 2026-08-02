@@ -151,24 +151,20 @@ local function serverHop()
         local fetchAttempts = 0
         local allCollectedServers = {}
 
-        print("[TradeBot] Searching for a brand new server...")
+        print("[TradeBot] Searching for a new server...")
 
         while not targetServer do
             fetchAttempts = fetchAttempts + 1
             
-            if fetchAttempts > 15 then
-                if #allCollectedServers > 0 then
-                    table.sort(allCollectedServers, function(a, b)
-                        return (a.time or 0) < (b.time or 0)
-                    end)
-                    targetServer = allCollectedServers[1].id
-                    print("[TradeBot] Fallback: Picking oldest server:", targetServer)
-                    break
-                else
-                    cursor = ""
-                    fetchAttempts = 0
-                    task.wait(2)
-                end
+            -- If API is blocked (403), fallback immediately to standard Roblox teleport matchmaking
+            if fetchAttempts > 5 then
+                print("[TradeBot] API restricted/blocked, using standard random server teleport...")
+                pcall(function()
+                    TeleportService:Teleport(PlaceId, LocalPlayer)
+                end)
+                task.wait(5)
+                fetchAttempts = 0
+                continue
             end
 
             local blacklist = getBlacklist()
@@ -181,11 +177,7 @@ local function serverHop()
                 if not req then error("No global request function found!") end
                 local res = req({
                     Url = url,
-                    Method = "GET",
-                    Headers = {
-                        ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                        ["Accept"] = "application/json"
-                    }
+                    Method = "GET"
                 })
                 if not res then error("Request returned nil response.") end
                 local code = res.StatusCode or res.status_code
@@ -219,7 +211,7 @@ local function serverHop()
                     
                     if #validServers > 0 then
                         targetServer = validServers[math.random(1, #validServers)]
-                        print("[TradeBot] Found brand new clean server:", targetServer)
+                        print("[TradeBot] Found clean server:", targetServer)
                     elseif data.nextPageCursor and data.nextPageCursor ~= "" then
                         cursor = data.nextPageCursor
                     else
@@ -228,7 +220,6 @@ local function serverHop()
                                 return (a.time or 0) < (b.time or 0)
                             end)
                             targetServer = allCollectedServers[1].id
-                            print("[TradeBot] Reached end of pages, selecting fallback server:", targetServer)
                         else
                             cursor = ""
                             task.wait(2)
@@ -236,12 +227,11 @@ local function serverHop()
                     end
                 end
             else
-                warn("[TradeBot] Request failed, reason:", tostring(responseText))
                 task.wait(2)
             end
             
             if not targetServer then
-                task.wait(0.5)
+                task.wait(1)
             end
         end
 
@@ -263,10 +253,9 @@ local function serverHop()
         end
 
         if not tpSuccess then
-            warn("[TradeBot] Teleport failed, retrying server hop...")
+            pcall(function() TeleportService:Teleport(PlaceId, LocalPlayer) end)
             getgenv().IsHopping = false
             task.wait(3)
-            serverHop()
         end
     end)
 end
