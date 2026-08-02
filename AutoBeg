@@ -1,4 +1,6 @@
 getgenv().TradeBotRunning = nil
+getgenv().IsHopping = nil
+
 if getgenv().TradeBotRunning then
     warn("[TradeBot Debug] Script already running, aborting duplicate execution.")
     return
@@ -78,8 +80,6 @@ local isDuplicateServer = false
 
 if blacklist[tostring(game.JobId)] and (os.time() - blacklist[tostring(game.JobId)]) < 3600 then
     isDuplicateServer = true
-else
-    blacklistServer(game.JobId)
 end
 
 pcall(function()
@@ -100,6 +100,7 @@ end)
 local function getAutoExecCode()
     return string.format([[
         getgenv().TradeBotRunning = nil
+        getgenv().IsHopping = nil
         if not game:IsLoaded() then game.Loaded:Wait() end
         task.spawn(function()
             task.wait(1)
@@ -156,7 +157,7 @@ local serverHop
 TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage, targetJobId)
     if player == LocalPlayer then
         warn("[TradeBot] Teleport failed safely:", errorMessage, "Result:", tostring(teleportResult))
-        getgenv().IsHopping = false
+        getgenv().IsHopping = nil
         task.wait(1.5)
         if serverHop then serverHop() end
     end
@@ -173,7 +174,7 @@ serverHop = function()
     blacklistServer(tostring(game.JobId))
     registerTeleportQueue()
 
-    local staggerDelay = (altNumber - 1) * 2.0
+    local staggerDelay = (altNumber - 1) * 3.0
     if staggerDelay > 0 then task.wait(staggerDelay) end
 
     task.spawn(function()
@@ -222,14 +223,14 @@ serverHop = function()
             if tpSuccess then return end
         end
 
-        -- Matchmaking Fallback (Guaranteed to bypass Error 769 and put you in a game)
+        -- Matchmaking Fallback
         print("[TradeBot] Using standard Roblox matchmaking fallback...")
         local fbSuccess, fbErr = pcall(function()
             TeleportService:Teleport(PlaceId, LocalPlayer)
         end)
         if not fbSuccess then
             warn("[TradeBot] Standard teleport error:", fbErr)
-            getgenv().IsHopping = false
+            getgenv().IsHopping = nil
             task.wait(2.5)
             serverHop()
         end
@@ -260,7 +261,7 @@ local function evaluateAltDominance()
     end)
 end
 
-evaluateAltDominance()
+task.delay(2, evaluateAltDominance)
 local dominanceDebounce = false
 Players.PlayerAdded:Connect(function(player)
     if player ~= LocalPlayer and string.match(player.Name, "^Xvlamer%d+$") then
@@ -623,7 +624,7 @@ task.spawn(function()
                     return 
                 end
             else
-                if tick() - joinTime >= 60 then
+                if tick() - joinTime >= 70 then
                     serverHop()
                     return 
                 end
