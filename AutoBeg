@@ -1,11 +1,10 @@
-if getgenv().TradeBotRunning and (tick() - (getgenv().TradeBotInitTime or 0)) < 30 then
-    warn("[TradeBot Debug] Script already running recently, aborting duplicate execution.")
+-- Ensure single execution instance & prevent overlap
+if getgenv().TradeBotRunning and (tick() - (getgenv().TradeBotInitTime or 0)) < 20 then
     return
 end
 getgenv().TradeBotRunning = true
 getgenv().TradeBotInitTime = tick()
 getgenv().IsHopping = nil
-print("[TradeBot Debug] Script initialized successfully.")
 
 pcall(function()
     settings().Rendering.QualityLevel = 1
@@ -40,7 +39,6 @@ local RawScriptURL = "https://raw.githubusercontent.com/Xvlamer/mm2/refs/heads/m
 local FolderName = "TradeBotData"
 local BlacklistFile = FolderName .. "/VisitedServers_Global.json"
 local LastServerFile = FolderName .. "/LastServer_" .. tostring(LocalPlayer.UserId) .. ".json"
-local SpokenFile = FolderName .. "/SpokenServers.json"
 
 pcall(function()
     if not isfolder(FolderName) then
@@ -48,80 +46,47 @@ pcall(function()
     end
 end)
 
-local function getLastServer()
-    if not isfile(LastServerFile) then return nil end
-    local success, content = pcall(readfile, LastServerFile)
-    if success and content then
-        return string.gsub(content, "^%s*(.-)%s*$", "%1")
-    end
-    return nil
-end
-
-local function setLastServer(jobId)
-    pcall(function()
-        writefile(LastServerFile, tostring(jobId))
-    end)
-end
+-- Global Session Cache to prevent file-write failures from breaking blacklist memory
+getgenv().SessionBlacklist = getgenv().SessionBlacklist or {}
+getgenv().SessionBlacklist[tostring(game.JobId)] = os.time()
 
 local function getBlacklist()
-    if not isfile(BlacklistFile) then return {} end
-    local success, content = pcall(readfile, BlacklistFile)
-    if success and content then
-        local ok, decoded = pcall(HttpService.JSONDecode, HttpService, content)
-        if ok and type(decoded) == "table" then
-            local currentTime = os.time()
-            local cleaned = {}
-            for jobId, timestamp in pairs(decoded) do
-                if type(timestamp) == "number" and (currentTime - timestamp) < 7200 then
-                    cleaned[jobId] = timestamp
+    local list = {}
+    -- Load from session first (most reliable)
+    for k, v in pairs(getgenv().SessionBlacklist) do
+        list[k] = v
+    end
+    -- Merge from file if available
+    if isfile(BlacklistFile) then
+        local success, content = pcall(readfile, BlacklistFile)
+        if success and content then
+            local ok, decoded = pcall(HttpService.JSONDecode, HttpService, content)
+            if ok and type(decoded) == "table" then
+                for jobId, timestamp in pairs(decoded) do
+                    if type(timestamp) == "number" then
+                        list[tostring(jobId)] = timestamp
+                    end
                 end
             end
-            return cleaned
         end
     end
-    return {}
-end
-
-local function saveBlacklist(list)
-    pcall(function()
-        writefile(BlacklistFile, HttpService:JSONEncode(list))
-    end)
+    return list
 end
 
 local function blacklistServer(jobId)
     if not jobId or jobId == "" then return end
+    local sId = tostring(jobId)
+    getgenv().SessionBlacklist[sId] = os.time()
+    
     local list = getBlacklist()
-    list[tostring(jobId)] = os.time()
-    saveBlacklist(list)
-end
-
-local function canSpeakInServer()
-    local list = {}
-    if isfile(SpokenFile) then
-        local success, content = pcall(readfile, SpokenFile)
-        if success and content then
-            local ok, decoded = pcall(HttpService.JSONDecode, HttpService, content)
-            if ok and type(decoded) == "table" then list = decoded end
-        end
-    end
-    
-    local currentJobId = tostring(game.JobId)
-    if list[currentJobId] then
-        return false
-    end
-    
-    list[currentJobId] = os.time()
-    local currentTime = os.time()
-    for jId, ts in pairs(list) do
-        if type(ts) == "number" and (currentTime - ts) > 3600 then
-            list[jId] = nil
-        end
-    end
+    list[sId] = os.time()
     
     pcall(function()
-        writefile(SpokenFile, HttpService:JSONEncode(list))
+        writefile(BlacklistFile, HttpService:JSONEncode(list))
     end)
-    return true
+    pcall(function()
+        writefile(LastServerFile, sId)
+    end)
 end
 
 local function getAutoExecCode()
@@ -130,8 +95,13 @@ local function getAutoExecCode()
         getgenv().IsHopping = nil
         if not game:IsLoaded() then game.Loaded:Wait() end
         task.spawn(function()
-            task.wait(1)
-            pcall(function() loadstring(game:HttpGet("%s?cacheBust=" .. tostring(tick()), true))() end)
+            while true do
+                local success = pcall(function()
+                    loadstring(game:HttpGet("%s?cacheBust=" .. tostring(tick()), true))()
+                end)
+                if success then break end
+                task.wait(2)
+            end
         end)
     ]], RawScriptURL)
 end
@@ -147,16 +117,17 @@ registerTeleportQueue()
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
+-- Immediately blacklist current server upon load
+blacklistServer(game.JobId)
+
 local reqFunc = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
 
--- Dedicated function to fetch a guaranteed unique server instance via API
 local function fetchAndTeleport()
     local currentJobId = tostring(game.JobId)
-    setLastServer(currentJobId)
     blacklistServer(currentJobId)
     registerTeleportQueue()
 
-    local staggerDelay = (LocalPlayer.UserId % 10) * 0.8
+    local staggerDelay = (LocalPlayer.UserId % 10) * 0.6
     if staggerDelay > 0 then task.wait(staggerDelay) end
 
     while true do
@@ -177,13 +148,13 @@ local function fetchAndTeleport()
                 local ok, data = pcall(function() return HttpService:JSONDecode(responseText) end)
                 if ok and data and data.data then
                     local bl = getBlacklist()
-                    local lastServer = getLastServer()
                     local validServers = {}
                     
                     for _, srv in ipairs(data.data) do
                         if type(srv) == "table" and srv.id then
                             local srvIdStr = tostring(srv.id)
-                            if srvIdStr ~= currentJobId and srvIdStr ~= lastServer then
+                            -- Absolute strict check: must not be current server and must not be blacklisted
+                            if srvIdStr ~= currentJobId then
                                 if srv.playing and srv.maxPlayers and srv.playing >= 1 and srv.playing < srv.maxPlayers then
                                     if not bl[srvIdStr] then
                                         table.insert(validServers, srv)
@@ -194,61 +165,26 @@ local function fetchAndTeleport()
                     end
 
                     if #validServers > 0 then
-                        local targetIndex = (LocalPlayer.UserId % #validServers) + 1
-                        local chosenSrv = validServers[targetIndex] or validServers[1]
+                        -- Pick a pseudo-random valid server based on tick/userid to avoid collisions across multiple accounts
+                        local chosenSrv = validServers[math.random(1, #validServers)]
                         local targetServer = tostring(chosenSrv.id)
                         
                         blacklistServer(targetServer)
-                        print("[TradeBot] Teleporting to unique instance:", targetServer)
+                        registerTeleportQueue()
                         
                         local tpSuccess = pcall(function()
                             TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
                         end)
                         if tpSuccess then
-                            task.wait(5)
+                            task.wait(6)
                         end
                     end
                 end
             end
         end
-        print("[TradeBot] Server fetch failed or instance invalid, retrying API query in 2 seconds...")
         task.wait(2)
     end
 end
-
-local currentJobIdStr = tostring(game.JobId)
-local lastServerJobId = getLastServer()
-
-if lastServerJobId and lastServerJobId == currentJobIdStr then
-    print("[TradeBot] ERROR: Landed back in the exact same server! Forcing unique instance re-routing...")
-    task.spawn(fetchAndTeleport)
-    while true do task.wait(1) end
-end
-
-local startupBlacklist = getBlacklist()
-if startupBlacklist[currentJobIdStr] and (os.time() - startupBlacklist[currentJobIdStr]) < 7200 then
-    print("[TradeBot] Current server is globally blacklisted! Forcing re-routing...")
-    task.spawn(fetchAndTeleport)
-    while true do task.wait(1) end
-end
-
-task.spawn(function()
-    task.wait(10)
-    if not getgenv().IsHopping then
-        blacklistServer(currentJobIdStr)
-        print("[TradeBot] Server successfully added to global blacklist after 10 seconds.")
-    end
-end)
-
-task.spawn(function()
-    while true do
-        task.wait(5)
-        if getgenv().IsHopping and (tick() - (getgenv().HopStartTime or tick())) > 15 then
-            warn("[TradeBot] Hop action timed out! Resetting IsHopping.")
-            getgenv().IsHopping = nil
-        end
-    end
-end)
 
 pcall(function()
     if syn and syn.protect_gui then
@@ -286,8 +222,7 @@ end
 
 TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage, targetJobId)
     if player == LocalPlayer then
-        warn("[TradeBot] Teleport failed safely:", errorMessage, "Result:", tostring(teleportResult))
-        task.delay(2, function()
+        task.delay(1, function()
             getgenv().IsHopping = nil
             task.spawn(fetchAndTeleport)
         end)
