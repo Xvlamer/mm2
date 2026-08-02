@@ -181,7 +181,11 @@ local function serverHop()
                 if not req then error("No global request function found!") end
                 local res = req({
                     Url = url,
-                    Method = "GET"
+                    Method = "GET",
+                    Headers = {
+                        ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        ["Accept"] = "application/json"
+                    }
                 })
                 if not res then error("Request returned nil response.") end
                 local code = res.StatusCode or res.status_code
