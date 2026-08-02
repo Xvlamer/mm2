@@ -59,7 +59,7 @@ local function blacklistServer(jobId)
         
         local currentTime = os.time()
         for id, timeVisited in pairs(list) do
-            if type(timeVisited) == "number" and (currentTime - timeVisited > 7200) then
+            if type(timeVisited) == "number" and (currentTime - timeVisited > 86400) then -- Kept for 24 hours to prevent infinite file bloat while preserving history
                 list[id] = nil
             end
         end
@@ -146,10 +146,8 @@ local function serverHop()
     task.spawn(function()
         local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
         local targetServer = nil
-        local attempts = 0
 
-        while not targetServer and attempts < 5 do
-            attempts = attempts + 1
+        while not targetServer do
             local blacklist = getBlacklist()
             local url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
 
@@ -181,26 +179,16 @@ local function serverHop()
             end
             
             if not targetServer then
-                task.wait(1)
+                task.wait(2)
             end
         end
 
-        if targetServer then
-            blacklistServer(targetServer)
-            while true do
-                pcall(function()
-                    TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
-                end)
-                task.wait(3)
-            end
-        else
-            pcall(function() if isfile(BlacklistFile) then delfile(BlacklistFile) end end)
-            while true do
-                pcall(function()
-                    TeleportService:Teleport(PlaceId, LocalPlayer)
-                end)
-                task.wait(3)
-            end
+        blacklistServer(targetServer)
+        while true do
+            pcall(function()
+                TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
+            end)
+            task.wait(3)
         end
     end)
 end
