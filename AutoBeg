@@ -57,15 +57,20 @@ local function getBlacklist()
     return {}
 end
 
-local function blacklistServer(jobId)
-    if not jobId or jobId == "" then return end
+local function saveBlacklist(list)
     pcall(function()
-        local list = getBlacklist()
-        list[tostring(jobId)] = os.time()
         writefile(BlacklistFile, HttpService:JSONEncode(list))
     end)
 end
 
+local function blacklistServer(jobId)
+    if not jobId or jobId == "" then return end
+    local list = getBlacklist()
+    list[tostring(jobId)] = os.time()
+    saveBlacklist(list)
+end
+
+-- Instantly blacklist the current server so we never join it again
 blacklistServer(game.JobId)
 
 pcall(function()
@@ -134,7 +139,7 @@ local function isTradeActive()
 end
 
 -- ==========================================
--- REWRITTEN SERVER HOP TO PREVENT 403 LOOPS
+-- STRICT SERVER HOP (No random teleports)
 -- ==========================================
 local function serverHop()
     if getgenv().IsHopping then return end
@@ -151,25 +156,11 @@ local function serverHop()
         local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
         local targetServer = nil
         local cursor = ""
-        local fetchAttempts = 0
 
-        print("[TradeBot] Initiating server hop sequence...")
+        print("[TradeBot] Initiating STRICT server hop sequence...")
 
         while not targetServer do
-            fetchAttempts = fetchAttempts + 1
-            
-            -- FIX: If API is blocked 3 times, KILL the search loop completely and force teleport.
-            if fetchAttempts > 3 then
-                print("[TradeBot] Proxy completely blocked. Forcing standard Roblox teleport loop...")
-                while task.wait(3) do
-                    pcall(function()
-                        TeleportService:Teleport(PlaceId, LocalPlayer)
-                    end)
-                end
-                return -- This ensures the 403 searching loop never runs again.
-            end
-
-            local blacklist = getBlacklist()
+            local bl = getBlacklist()
             local url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100"
             if cursor ~= "" then
                 url = url .. "&cursor=" .. cursor
@@ -193,7 +184,7 @@ local function serverHop()
                     for _, srv in ipairs(data.data) do
                         if type(srv) == "table" and srv.id and tostring(srv.id) ~= tostring(game.JobId) then
                             if srv.playing and srv.maxPlayers and srv.playing < srv.maxPlayers then
-                                if not blacklist[tostring(srv.id)] then
+                                if not bl[tostring(srv.id)] then
                                     table.insert(validServers, tostring(srv.id))
                                 end
                             end
@@ -204,19 +195,22 @@ local function serverHop()
                         targetServer = validServers[math.random(1, #validServers)]
                     elseif data.nextPageCursor and data.nextPageCursor ~= "" then
                         cursor = data.nextPageCursor
-                        fetchAttempts = 0 -- Only reset if we got a successful page
                     end
                 end
             else
-                warn("[TradeBot] Request failed, reason:", tostring(responseText))
+                warn("[TradeBot] Proxy blocked (403) or failed. Backing off for 15 seconds to bypass rate-limit...")
+                -- Instead of random teleporting, we WAIT for the proxy to unblock us
+                task.wait(15) 
+            end
+            
+            if not targetServer then
                 task.wait(1.5)
             end
         end
 
-        -- If the proxy actually works and finds a server
         if targetServer then
             blacklistServer(targetServer)
-            print("[TradeBot] Teleporting to specific server:", targetServer)
+            print("[TradeBot] Teleporting to STRICTLY NEW server ID:", targetServer)
             while task.wait(3) do
                 pcall(function()
                     TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
@@ -577,7 +571,6 @@ task.spawn(function()
     end
 end)
 
--- TIMING LOGIC (Triggers Hop after 60s idle or 10s post-trade)
 task.spawn(function()
     local joinTime = tick()
     local tradeEndedTime = 0
