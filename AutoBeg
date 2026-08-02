@@ -91,10 +91,7 @@ local function getAutoExecCode()
     ]], RawScriptURL)
 end
 
-local teleportQueued = false
 local function registerTeleportQueue()
-    if teleportQueued then return end
-    teleportQueued = true
     pcall(function()
         if queue_on_teleport then
             queue_on_teleport(getAutoExecCode())
@@ -106,14 +103,15 @@ registerTeleportQueue()
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 -- ==========================================
--- INSTANT STARTUP BLACKLIST CHECK
+-- INSTANT STARTUP BLACKLIST CHECK (WITH SAFETY DELAY)
 -- ==========================================
 local startupBlacklist = getBlacklist()
 local currentJobIdStr = tostring(game.JobId)
 if startupBlacklist[currentJobIdStr] and (os.time() - startupBlacklist[currentJobIdStr]) < 3600 then
-    print("[TradeBot] Current server is recently blacklisted! Bouncing instantly...")
+    print("[TradeBot] Current server is blacklisted! Escaping safely in 5 seconds...")
     registerTeleportQueue()
     task.spawn(function()
+        task.wait(5) -- Prevents instant spam rate-limiting
         TeleportService:Teleport(PlaceId, LocalPlayer)
     end)
     while true do task.wait(1) end
@@ -193,12 +191,56 @@ serverHop = function()
     if staggerDelay > 0 then task.wait(staggerDelay) end
 
     task.spawn(function()
-        print("[TradeBot] Finding new server via standard matchmaking...")
-        local success, err = pcall(function()
+        local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
+        local targetServer = nil
+
+        print("[TradeBot] Finding unique server instance via API...")
+
+        if req then
+            local success, responseText = pcall(function()
+                local res = req({
+                    Url = "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100",
+                    Method = "GET",
+                    Headers = { ["User-Agent"] = "Mozilla/5.0" }
+                })
+                if res and (res.StatusCode == 200 or res.status_code == 200) then
+                    return res.Body or res.body
+                end
+                error("Request failed")
+            end)
+
+            if success and responseText then
+                local ok, data = pcall(function() return HttpService:JSONDecode(responseText) end)
+                if ok and data and data.data then
+                    local bl = getBlacklist()
+                    for _, srv in ipairs(data.data) do
+                        if type(srv) == "table" and srv.id and tostring(srv.id) ~= tostring(game.JobId) then
+                            if srv.playing and srv.maxPlayers and srv.playing < srv.maxPlayers then
+                                if not bl[tostring(srv.id)] then
+                                    targetServer = tostring(srv.id)
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        if targetServer then
+            print("[TradeBot] Teleporting to target instance:", targetServer)
+            local tpSuccess = pcall(function()
+                TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
+            end)
+            if tpSuccess then return end
+        end
+
+        print("[TradeBot] Matchmaking fallback...")
+        local fbSuccess, fbErr = pcall(function()
             TeleportService:Teleport(PlaceId, LocalPlayer)
         end)
-        if not success then
-            warn("[TradeBot] Teleport error:", err)
+        if not fbSuccess then
+            warn("[TradeBot] Fallback error:", fbErr)
             task.delay(4, function()
                 getgenv().IsHopping = nil
                 serverHop()
