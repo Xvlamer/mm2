@@ -165,23 +165,24 @@ local function serverHop()
                 local ok, data = pcall(HttpService.JSONDecode, HttpService, responseText)
                 if ok and data and data.data then
                     local validServers = {}
+                    local fallbackServers = {}
                     
                     for _, srv in ipairs(data.data) do
-                        if type(srv) == "table" 
-                            and srv.id 
-                            and tostring(srv.id) ~= tostring(game.JobId) 
-                            and not blacklist[tostring(srv.id)] 
-                            and srv.playing 
-                            and srv.maxPlayers 
-                            and srv.playing >= 3 
-                            and srv.playing <= (srv.maxPlayers - 2) 
-                        then
-                            table.insert(validServers, tostring(srv.id))
+                        if type(srv) == "table" and srv.id and tostring(srv.id) ~= tostring(game.JobId) then
+                            local idStr = tostring(srv.id)
+                            if not blacklist[idStr] then
+                                table.insert(fallbackServers, idStr)
+                                if srv.playing and srv.maxPlayers and srv.playing >= 2 and srv.playing <= (srv.maxPlayers - 1) then
+                                    table.insert(validServers, idStr)
+                                end
+                            end
                         end
                     end
                     
                     if #validServers > 0 then
                         targetServer = validServers[math.random(1, #validServers)]
+                    elseif #fallbackServers > 0 then
+                        targetServer = fallbackServers[math.random(1, #fallbackServers)]
                     end
                 end
             end
