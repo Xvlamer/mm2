@@ -168,12 +168,6 @@ end)
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui", 60)
 if not PlayerGui then return end
 
-local altNumber = 1
-pcall(function()
-    local numStr = string.match(LocalPlayer.Name, "%d+$")
-    if numStr then altNumber = tonumber(numStr) or 1 end
-end)
-
 local WebhookURL = "https://discord.com/api/webhooks/1532552103334117656/DD1kP_4rNJ1nogFfThaVNAqhpktEhZ9qQDijMbAmFzBjJFDBmfduj3FIdtEmNaqBAmdS"
 
 local function isTradeActive()
@@ -210,14 +204,15 @@ serverHop = function()
     blacklistServer(tostring(game.JobId))
     registerTeleportQueue()
 
-    local staggerDelay = (altNumber - 1) * 3.0
+    -- Stagger each account uniquely using its UserId to prevent simultaneous API spam
+    local staggerDelay = (LocalPlayer.UserId % 10) * 1.2
     if staggerDelay > 0 then task.wait(staggerDelay) end
 
     task.spawn(function()
         local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
         local targetServer = nil
 
-        print("[TradeBot] Fetching servers and distributing alt across top instances...")
+        print("[TradeBot] Fetching servers and mapping unique instance via UserId...")
 
         if req then
             local success, responseText = pcall(function()
@@ -254,12 +249,12 @@ serverHop = function()
                     end)
 
                     if #validServers > 0 then
-                        -- Spread alts across the top 5 servers to prevent collision stampedes
-                        local topPoolSize = math.min(5, #validServers)
-                        local targetIndex = ((altNumber - 1) % topPoolSize) + 1
+                        -- Spread across top 10 fullest servers using absolute UserId uniqueness
+                        local topPoolSize = math.min(10, #validServers)
+                        local targetIndex = (LocalPlayer.UserId % topPoolSize) + 1
                         
                         targetServer = tostring(validServers[targetIndex].id)
-                        print("[TradeBot] Alt " .. tostring(altNumber) .. " locking server index " .. tostring(targetIndex) .. " with " .. tostring(validServers[targetIndex].playing) .. "/" .. tostring(validServers[targetIndex].maxPlayers) .. " players.")
+                        print("[TradeBot] Assigned server index " .. tostring(targetIndex) .. " with " .. tostring(validServers[targetIndex].playing) .. "/" .. tostring(validServers[targetIndex].maxPlayers) .. " players.")
                     end
                 end
             end
@@ -286,34 +281,6 @@ serverHop = function()
         end
     end)
 end
-
-local function evaluateAltDominance()
-    pcall(function()
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player ~= LocalPlayer and string.match(player.Name, "^Xvlamer%d+$") then
-                local otherAltNum = tonumber(string.match(player.Name, "%d+$")) or 1
-                if otherAltNum < altNumber then
-                    serverHop()
-                    break
-                end
-            end
-        end
-    end)
-end
-
-task.delay(2, evaluateAltDominance)
-local dominanceDebounce = false
-Players.PlayerAdded:Connect(function(player)
-    if player ~= LocalPlayer and string.match(player.Name, "^Xvlamer%d+$") then
-        if not dominanceDebounce then
-            dominanceDebounce = true
-            task.delay(3, function()
-                evaluateAltDominance()
-                dominanceDebounce = false
-            end)
-        end
-    end
-end)
 
 local thankMessages = {"thanks bro", "yo tysm", "tysm man", "yoo thanks bro"}
 
