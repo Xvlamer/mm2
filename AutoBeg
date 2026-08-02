@@ -172,29 +172,25 @@ local function serverHop()
             end
 
             local blacklist = getBlacklist()
-            -- sortOrder=Asc ensures we grab brand new/empty servers with the lowest player counts first
             local url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100"
             if cursor ~= "" then
                 url = url .. "&cursor=" .. cursor
             end
 
             local success, responseText = pcall(function()
-                if req then
-                    local res = req({
-                        Url = url,
-                        Method = "GET",
-                        Headers = {
-                            ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                            ["Accept"] = "application/json"
-                        }
-                    })
-                    if res then
-                        local code = res.StatusCode or res.status_code
-                        local body = res.Body or res.body
-                        if code == 200 and body then return body end
-                    end
+                if not req then error("No global request function found!") end
+                local res = req({
+                    Url = url,
+                    Method = "GET"
+                })
+                if not res then error("Request returned nil response.") end
+                local code = res.StatusCode or res.status_code
+                local body = res.Body or res.body
+                if code == 200 and body then
+                    return body
+                else
+                    error("HTTP Code: " .. tostring(code))
                 end
-                return nil
             end)
 
             if success and responseText then
@@ -236,7 +232,7 @@ local function serverHop()
                     end
                 end
             else
-                warn("[TradeBot] Request failed, retrying...")
+                warn("[TradeBot] Request failed, reason:", tostring(responseText))
                 task.wait(2)
             end
             
@@ -573,7 +569,7 @@ task.spawn(function()
                     if acceptFolder then
                         if acceptFolder:FindFirstChild("Cancel") and acceptFolder.Cancel:FindFirstChild("ActionButton") then acceptFolder.Cancel.ActionButton:Destroy() end
                         if acceptFolder:FindFirstChild("ActionButton") and acceptFolder.ActionButton.Visible then fireGuiButton(acceptFolder.ActionButton) end
-                        if acceptFolder:FindFirstChild("Confirm") and acceptFolder.Confirm:FindFirstChild("ActionButton") and acceptFolder.Confirm.ActionButton.Visible then fireGuiButton(acceptFolder.Confirm.ActionButton) end
+                        if acceptFolder:FindFirstChild("Confirm") and acceptFolder.Confirm:FindFirstChild("ActionButton") and acceptFolder.Confirm.ActionButton.Visible then fireGuiButton(acceptFolder.ActionButton) end
                     end
                 end)
             end
