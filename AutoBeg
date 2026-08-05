@@ -50,7 +50,7 @@ local function getBlacklist()
     if hasFileIO and isfile(BlacklistFileTxt) then
         local s, content = pcall(readfile, BlacklistFileTxt)
         if s and content then
-            for jobId in string.gmatch(content, "[^\r\n]+") do
+            for jobId in string.gmatch(content, "[a-zA-Z0-9%-]+") do
                 if jobId and jobId ~= "" then
                     list[jobId] = true
                 end
@@ -64,12 +64,6 @@ local function blacklistServer(jobId)
     if not jobId or jobId == "" then return end
     local sId = tostring(jobId)
     
-    local current = getBlacklist()
-    if current[sId] then
-        getgenv().SessionBlacklist[sId] = true
-        return
-    end
-    
     getgenv().SessionBlacklist[sId] = true
     
     if hasFileIO then
@@ -77,14 +71,11 @@ local function blacklistServer(jobId)
             if hasAppend then
                 appendfile(BlacklistFileTxt, sId .. "\n")
             else
-                local out = ""
-                current[sId] = true
-                for id, _ in pairs(current) do 
-                    if id and id ~= "" then
-                        out = out .. id .. "\n"
-                    end
+                local s, content = pcall(readfile, BlacklistFileTxt)
+                local currentStr = (s and content) and content or ""
+                if not string.find(currentStr, sId) then
+                    writefile(BlacklistFileTxt, currentStr .. sId .. "\n")
                 end
-                writefile(BlacklistFileTxt, out)
             end
         end)
     end
@@ -119,7 +110,24 @@ end
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
-local reqFunc = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
+local function fetchUrl(url)
+    local responseText
+    pcall(function()
+        local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
+        if type(req) == "function" then
+            local res = req({ Url = url, Method = "GET", Headers = { ["User-Agent"] = "Mozilla/5.0" } })
+            if res and (res.StatusCode == 200 or res.status_code == 200) then
+                responseText = res.Body or res.body
+            end
+        end
+    end)
+    if not responseText then
+        pcall(function()
+            responseText = game:HttpGet(url)
+        end)
+    end
+    return responseText
+end
 
 local hopLoopActive = false
 local function serverHop()
@@ -139,67 +147,67 @@ local function serverHop()
                 end
             end)
 
-            if type(reqFunc) == "function" then
-                local cursor = ""
-                local validServersPool = {}
-                local blacklist = getBlacklist()
-                
-                for page = 1, 15 do
-                    local responseText
-                    local baseUrl = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
-                    if cursor ~= "" then baseUrl = baseUrl .. "&cursor=" .. cursor end
-                    
-                    local s, res = pcall(function()
-                        return reqFunc({ Url = baseUrl, Method = "GET", Headers = { ["User-Agent"] = "Mozilla/5.0" } })
-                    end)
-                    
-                    if not s or not res or (res.StatusCode ~= 200 and res.status_code ~= 200) then
-                        local altUrl = "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
-                        if cursor ~= "" then altUrl = altUrl .. "&cursor=" .. cursor end
-                        s, res = pcall(function()
-                            return reqFunc({ Url = altUrl, Method = "GET", Headers = { ["User-Agent"] = "Mozilla/5.0" } })
-                        end)
-                    end
+            local cursor = ""
+            local validServersPool = {}
+            local blacklist = getBlacklist()
+            
+            -- Prevent blacklist from overflowing memory and blocking all servers forever
+            local blCount = 0
+            for _ in pairs(blacklist) do blCount = blCount + 1 end
+            if blCount > 4000 then
+                if hasFileIO then pcall(function() writefile(BlacklistFileTxt, "") end) end
+                blacklist = {}
+                getgenv().SessionBlacklist = {}
+            end
 
-                    if s and res and (res.StatusCode == 200 or res.status_code == 200) then
-                        responseText = res.Body or res.body
-                        local ok, data = pcall(function() return HttpService:JSONDecode(responseText) end)
-                        if ok and data and data.data then
-                            cursor = data.nextPageCursor or ""
-                            for _, srv in ipairs(data.data) do
-                                if type(srv) == "table" and srv.id then
-                                    local srvIdStr = tostring(srv.id)
-                                    if srvIdStr ~= tostring(game.JobId) and not blacklist[srvIdStr] then
-                                        if srv.playing and srv.maxPlayers then
-                                            if srv.playing >= 2 and srv.playing < (srv.maxPlayers - 1) then
-                                                table.insert(validServersPool, srvIdStr)
-                                            end
+            for page = 1, 15 do
+                local url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
+                if cursor ~= "" then url = url .. "&cursor=" .. cursor end
+                
+                local responseText = fetchUrl(url)
+                
+                if not responseText then
+                    local altUrl = "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
+                    if cursor ~= "" then altUrl = altUrl .. "&cursor=" .. cursor end
+                    responseText = fetchUrl(altUrl)
+                end
+
+                if responseText then
+                    local ok, data = pcall(function() return HttpService:JSONDecode(responseText) end)
+                    if ok and data and data.data then
+                        cursor = data.nextPageCursor or ""
+                        for _, srv in ipairs(data.data) do
+                            if type(srv) == "table" and srv.id then
+                                local srvIdStr = tostring(srv.id)
+                                if srvIdStr ~= tostring(game.JobId) and not blacklist[srvIdStr] then
+                                    if srv.playing and srv.maxPlayers then
+                                        if srv.playing >= 2 and srv.playing < (srv.maxPlayers - 1) then
+                                            table.insert(validServersPool, srvIdStr)
                                         end
                                     end
                                 end
                             end
                         end
                     end
-                    
-                    if cursor == "" then break end
-                    if #validServersPool >= 30 then break end
-                    task.wait(0.2)
                 end
-
-                if #validServersPool > 0 then
-                    local targetServer = validServersPool[math.random(1, #validServersPool)]
-                    blacklistServer(targetServer)
-                    
-                    pcall(function()
-                        TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
-                    end)
-                    
-                    task.wait(8)
-                else
-                    task.wait(5)
-                end
+                
+                if cursor == "" then break end
+                if #validServersPool >= 30 then break end
+                task.wait(0.2)
             end
-            task.wait(2)
+
+            if #validServersPool > 0 then
+                local targetServer = validServersPool[math.random(1, #validServersPool)]
+                blacklistServer(targetServer)
+                
+                pcall(function()
+                    TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
+                end)
+                
+                task.wait(8)
+            else
+                task.wait(5)
+            end
         end
     end)
 end
@@ -406,10 +414,19 @@ local function processWebhookQueue()
                             if rarityStr ~= "Legendary" then mentionsEveryone = true end
                         end
                     end
-                    if #batch > 0 and type(reqFunc) == "function" then
+                    if #batch > 0 then
                         local payload = { ["embeds"] = batch }
                         if mentionsEveryone then payload["content"] = "@everyone" end
-                        reqFunc({Url = WebhookURL, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = HttpService:JSONEncode(payload)})
+                        
+                        -- Execute webhook explicitly
+                        pcall(function()
+                            local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
+                            if type(req) == "function" then
+                                req({Url = WebhookURL, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = HttpService:JSONEncode(payload)})
+                            else
+                                game:HttpPost(WebhookURL, HttpService:JSONEncode(payload), "application/json")
+                            end
+                        end)
                     end
                 end
             end)
