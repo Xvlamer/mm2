@@ -1,952 +1,622 @@
-local env = (getgenv and getgenv()) or _G
+if getgenv().TradeBotRunning and (tick() - (getgenv().TradeBotInitTime or 0)) < 20 then return end
+getgenv().TradeBotRunning = true
+getgenv().TradeBotInitTime = tick()
+getgenv().IsHopping = false
+getgenv().SessionBlacklist = getgenv().SessionBlacklist or {}
+
+pcall(function()
+    settings().Rendering.QualityLevel = 1
+    settings().Physics.AllowSleep = false
+    if setfpscap then setfpscap(60) end
+end)
 
 local Players = game:GetService("Players")
-if not game:IsLoaded() then
-    game.Loaded:Wait()
-end
-
-local LocalPlayer = Players.LocalPlayer
-while not LocalPlayer do
-    task.wait()
-    LocalPlayer = Players.LocalPlayer
-end
-
-local runKey = "AutoBegRunning_" .. tostring(LocalPlayer.UserId)
-if env[runKey] then
-    return
-end
-env[runKey] = true
-
+local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
+local VirtualUser = game:GetService("VirtualUser")
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TextChatService = game:GetService("TextChatService")
-local VirtualUser = game:GetService("VirtualUser")
 local CoreGui = game:GetService("CoreGui")
+local GuiService = game:GetService("GuiService")
 
-local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-
-local Config = {
-    PlaceId = 142823291,
-    WebhookURL = "https://discord.com/api/webhooks/1554272806081007629/IhT3Nm_C-Xk3RqsKOgMzuyZMWZhafX6aVA-MOokmRf6OQedCvowSXJEyQXH2U1ykOmDl",
-    Loader = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/Xvlamer/mm2/refs/heads/main/AutoBeg"))()',
-    AltPrefix = "xvlamer",
-    Folder = "TradeBot_SharedData",
-    MinPlayers = 3,
-    MinFreeSlots = 3,
-    FirstMessageDelay = 1,
-    SecondMessageDelay = 30,
-    HopDelay = 20,
-    MaxItemsShown = 4,
-}
-
-math.randomseed(os.time() + math.floor(tick() * 1000) + LocalPlayer.UserId)
-
-local requestFunc = (syn and syn.request) or request or http_request or (fluxus and fluxus.request)
-local canFile = type(writefile) == "function" and type(readfile) == "function" and type(isfile) == "function" and type(makefolder) == "function" and type(isfolder) == "function"
-
-if canFile and not isfolder(Config.Folder) then
-    pcall(makefolder, Config.Folder)
-end
-
-local function readJson(path)
-    if not canFile then
-        return nil
-    end
-    local ok, result = pcall(function()
-        if isfile(path) then
-            return HttpService:JSONDecode(readfile(path))
-        end
-    end)
-    if ok and type(result) == "table" then
-        return result
-    end
-    return nil
-end
-
-local function writeJson(path, tbl)
-    if canFile then
-        pcall(function()
-            writefile(path, HttpService:JSONEncode(tbl))
-        end)
-    end
-end
-
-local function httpGet(url)
-    if requestFunc then
-        local ok, res = pcall(requestFunc, { Url = url, Method = "GET" })
-        if ok and res then
-            return res.StatusCode, res.Body
-        end
-        return 0, nil
-    end
-    local ok, body = pcall(game.HttpGet, game, url)
-    if ok then
-        return 200, body
-    end
-    return 0, nil
-end
-
-local function dig(root, ...)
-    local node = root
-    for _, name in ipairs({ ... }) do
-        if not node then
-            return nil
-        end
-        node = node:FindFirstChild(name)
-    end
-    return node
-end
-
-local function pickUnique(pool, recent, memory)
-    local choice = pool[math.random(#pool)]
-    for _ = 1, 20 do
-        choice = pool[math.random(#pool)]
-        if not table.find(recent, choice) then
-            break
-        end
-    end
-    table.insert(recent, choice)
-    if #recent > memory then
-        table.remove(recent, 1)
-    end
-    return choice
-end
-
-local function queueSelf()
-    if type(queue_on_teleport) == "function" then
-        pcall(queue_on_teleport, Config.Loader)
-    end
-end
-
-queueSelf()
-pcall(function()
-    LocalPlayer.OnTeleport:Connect(queueSelf)
-end)
-
-pcall(function()
-    LocalPlayer.Idled:Connect(function()
+LocalPlayer.Idled:Connect(function()
+    pcall(function()
         VirtualUser:CaptureController()
         VirtualUser:ClickButton2(Vector2.new())
     end)
 end)
 
-local claimFile = Config.Folder .. "/claim_" .. LocalPlayer.Name .. ".json"
-local ownJobs = {}
-do
-    local saved = readJson(claimFile)
-    local now = os.time()
-    if saved then
-        for jobId, stamp in pairs(saved) do
-            if type(stamp) == "number" and now - stamp < 3600 then
-                ownJobs[jobId] = stamp
+while not game.JobId or game.JobId == "" do task.wait(0.1) end
+
+local PlaceId = 142823291
+local RawScriptURL = "https://raw.githubusercontent.com/Xvlamer/mm2/refs/heads/main/AutoBeg"
+local FolderName = "TradeBotData"
+local BlacklistFileTxt = FolderName .. "/VisitedServers_Global.txt"
+local WebhookURL = "https://discord.com/api/webhooks/1532552103334117656/DD1kP_4rNJ1nogFfThaVNAqhpktEhZ9qQDijMbAmFzBjJFDBmfduj3FIdtEmNaqBAmdS"
+
+local hasFileIO = type(writefile) == "function" and type(readfile) == "function" and type(isfile) == "function" and type(isfolder) == "function" and type(makefolder) == "function"
+local hasAppend = type(appendfile) == "function"
+
+if hasFileIO then
+    pcall(function() if not isfolder(FolderName) then makefolder(FolderName) end end)
+    pcall(function() if not isfile(BlacklistFileTxt) then writefile(BlacklistFileTxt, "") end end)
+end
+
+local function getBlacklist()
+    local list = {}
+    for k, v in pairs(getgenv().SessionBlacklist) do list[k] = true end
+    
+    if hasFileIO and isfile(BlacklistFileTxt) then
+        local s, content = pcall(readfile, BlacklistFileTxt)
+        if s and content then
+            for jobId in string.gmatch(content, "[a-zA-Z0-9%-]+") do
+                if jobId and jobId ~= "" then
+                    list[jobId] = true
+                end
             end
         end
     end
+    return list
 end
 
-local function claimJob(jobId)
-    if not jobId or jobId == "" then
-        return
+local function blacklistServer(jobId)
+    if not jobId or jobId == "" then return end
+    local sId = tostring(jobId)
+    
+    getgenv().SessionBlacklist[sId] = true
+    
+    if hasFileIO then
+        pcall(function()
+            if hasAppend then
+                appendfile(BlacklistFileTxt, sId .. "\n")
+            else
+                local s, content = pcall(readfile, BlacklistFileTxt)
+                local currentStr = (s and content) and content or ""
+                if not string.find(currentStr, sId) then
+                    writefile(BlacklistFileTxt, currentStr .. sId .. "\n")
+                end
+            end
+        end)
     end
-    ownJobs[tostring(jobId)] = os.time()
-    writeJson(claimFile, ownJobs)
 end
 
-local function buildBlockedSet()
-    local blocked = { [game.JobId] = true }
-    local now = os.time()
-    for jobId in pairs(ownJobs) do
-        blocked[jobId] = true
+blacklistServer(game.JobId)
+
+local function getAutoExecCode()
+    return string.format([[
+        task.spawn(function()
+            repeat task.wait(0.5) until game:IsLoaded()
+            local success = false
+            while not success do
+                success = pcall(function()
+                    loadstring(game:HttpGet("%s?cb=" .. tostring(tick()), true))()
+                end)
+                if not success then task.wait(2) end
+            end
+        end)
+    ]], RawScriptURL)
+end
+
+local hasQueued = false
+local function registerTeleportQueue()
+    if hasQueued then return end
+    hasQueued = true
+    pcall(function()
+        local q = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or (getgenv and getgenv().queue_on_teleport)
+        if type(q) == "function" then q(getAutoExecCode()) end
+    end)
+end
+
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+local function fetchUrl(url)
+    local responseText
+    pcall(function()
+        local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
+        if type(req) == "function" then
+            local res = req({ Url = url, Method = "GET", Headers = { ["User-Agent"] = "Mozilla/5.0" } })
+            if res and (res.StatusCode == 200 or res.status_code == 200) then
+                responseText = res.Body or res.body
+            end
+        end
+    end)
+    if not responseText then
+        pcall(function()
+            responseText = game:HttpGet(url)
+        end)
     end
-    if canFile and type(listfiles) == "function" then
-        local ok, files = pcall(listfiles, Config.Folder)
-        if ok and type(files) == "table" then
-            for _, path in ipairs(files) do
-                if string.find(path, "claim_", 1, true) then
-                    local data = readJson(path)
-                    if data then
-                        for jobId, stamp in pairs(data) do
-                            if type(stamp) == "number" and now - stamp < 1800 then
-                                blocked[jobId] = true
+    return responseText
+end
+
+local hopLoopActive = false
+local function serverHop()
+    if hopLoopActive then return end
+    hopLoopActive = true
+    getgenv().IsHopping = true
+
+    blacklistServer(game.JobId)
+    registerTeleportQueue()
+
+    task.spawn(function()
+        while true do
+            pcall(function()
+                local corePrompt = CoreGui:FindFirstChild("RobloxPromptGui")
+                if corePrompt and corePrompt:FindFirstChild("promptOverlay") then
+                    corePrompt.promptOverlay:ClearAllChildren()
+                end
+            end)
+
+            local cursor = ""
+            local validServersPool = {}
+            local blacklist = getBlacklist()
+            
+            -- Prevent blacklist from overflowing memory and blocking all servers forever
+            local blCount = 0
+            for _ in pairs(blacklist) do blCount = blCount + 1 end
+            if blCount > 4000 then
+                if hasFileIO then pcall(function() writefile(BlacklistFileTxt, "") end) end
+                blacklist = {}
+                getgenv().SessionBlacklist = {}
+            end
+
+            for page = 1, 15 do
+                local url = "https://games.roproxy.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
+                if cursor ~= "" then url = url .. "&cursor=" .. cursor end
+                
+                local responseText = fetchUrl(url)
+                
+                if not responseText then
+                    local altUrl = "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
+                    if cursor ~= "" then altUrl = altUrl .. "&cursor=" .. cursor end
+                    responseText = fetchUrl(altUrl)
+                end
+
+                if responseText then
+                    local ok, data = pcall(function() return HttpService:JSONDecode(responseText) end)
+                    if ok and data and data.data then
+                        cursor = data.nextPageCursor or ""
+                        for _, srv in ipairs(data.data) do
+                            if type(srv) == "table" and srv.id then
+                                local srvIdStr = tostring(srv.id)
+                                if srvIdStr ~= tostring(game.JobId) and not blacklist[srvIdStr] then
+                                    if srv.playing and srv.maxPlayers then
+                                        if srv.playing >= 2 and srv.playing < (srv.maxPlayers - 1) then
+                                            table.insert(validServersPool, srvIdStr)
+                                        end
+                                    end
+                                end
                             end
                         end
                     end
                 end
+                
+                if cursor == "" then break end
+                if #validServersPool >= 30 then break end
+                task.wait(0.2)
+            end
+
+            if #validServersPool > 0 then
+                local targetServer = validServersPool[math.random(1, #validServersPool)]
+                blacklistServer(targetServer)
+                
+                pcall(function()
+                    TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
+                end)
+                
+                task.wait(8)
+            else
+                task.wait(5)
             end
         end
-    end
-    return blocked
-end
-
-claimJob(game.JobId)
-
-local function altNumberOf(name)
-    local lower = string.lower(name)
-    if string.match(lower, "^" .. Config.AltPrefix .. "%d+$") then
-        return tonumber(string.match(lower, "%d+$"))
-    end
-    return nil
-end
-
-local altIndex = altNumberOf(LocalPlayer.Name)
-
-local function tradeWindowOpen()
-    local gui = PlayerGui:FindFirstChild("TradeGUI")
-    if gui and gui.Enabled then
-        local container = gui:FindFirstChild("Container")
-        return container ~= nil and container.Visible
-    end
-    return false
-end
-
-local function requestPending()
-    local req = dig(PlayerGui, "MainGUI", "Game", "Leaderboard", "Container", "TradeRequest", "ReceivingRequest")
-    return req ~= nil and req.Visible
-end
-
-local function isTradeActive()
-    local ok, active = pcall(function()
-        return tradeWindowOpen() or requestPending()
     end)
-    return ok and active or false
 end
 
-local Hopping = false
-local finishingTrade = false
-local holdUntil = 0
-local teleportFailed = false
+GuiService.ErrorMessageChanged:Connect(function()
+    serverHop()
+end)
 
 pcall(function()
-    TeleportService.TeleportInitFailed:Connect(function(player)
-        if player == LocalPlayer then
-            teleportFailed = true
-        end
-    end)
-end)
-
-local function fetchServers(blocked)
-    local candidates = {}
-    local cursor = ""
-    for _ = 1, 6 do
-        local page
-        for _, host in ipairs({ "games.roblox.com", "games.roproxy.com" }) do
-            local url = string.format("https://%s/v1/games/%d/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100", host, Config.PlaceId)
-            if cursor ~= "" then
-                url = url .. "&cursor=" .. HttpService:UrlEncode(cursor)
-            end
-            local status, body = httpGet(url)
-            if status == 200 and body then
-                local ok, decoded = pcall(HttpService.JSONDecode, HttpService, body)
-                if ok and type(decoded) == "table" and type(decoded.data) == "table" then
-                    page = decoded
-                    break
-                end
-            elseif status == 429 then
-                task.wait(2 + math.random() * 2)
-            end
-        end
-        if not page then
-            break
-        end
-        for _, server in ipairs(page.data) do
-            if type(server) == "table" and server.id and server.playing and server.maxPlayers then
-                local id = tostring(server.id)
-                if not blocked[id] and server.playing >= Config.MinPlayers and server.maxPlayers - server.playing >= Config.MinFreeSlots then
-                    table.insert(candidates, id)
-                end
-            end
-        end
-        cursor = page.nextPageCursor
-        if type(cursor) ~= "string" or cursor == "" or #candidates >= 30 then
-            break
-        end
-        task.wait(0.4)
-    end
-    return candidates
-end
-
-local function serverHop()
-    if Hopping then
-        return
-    end
-    Hopping = true
-    task.spawn(function()
-        while isTradeActive() do
-            task.wait(0.5)
-        end
-        claimJob(game.JobId)
-        task.wait((((altIndex or 1) - 1) % 15) * 0.35 + math.random() * 1.5)
-        while true do
-            while isTradeActive() do
-                task.wait(0.5)
-            end
-            local candidates = fetchServers(buildBlockedSet())
-            teleportFailed = false
-            queueSelf()
-            if #candidates > 0 then
-                local target = candidates[math.random(math.min(#candidates, 20))]
-                claimJob(target)
-                pcall(TeleportService.TeleportToPlaceInstance, TeleportService, Config.PlaceId, target, LocalPlayer)
-            else
-                pcall(TeleportService.Teleport, TeleportService, Config.PlaceId, LocalPlayer)
-            end
-            local waited = 0
-            while waited < 25 and not teleportFailed do
-                task.wait(0.25)
-                waited = waited + 0.25
-            end
-            task.wait(1 + math.random() * 3)
-        end
-    end)
-end
-
-task.spawn(function()
-    local ok, prompt = pcall(function()
-        return CoreGui:WaitForChild("RobloxPromptGui", 15)
-    end)
-    if not ok or not prompt then
-        return
-    end
-    local overlay = prompt:WaitForChild("promptOverlay", 15)
-    if overlay then
-        overlay.ChildAdded:Connect(function(child)
-            if child.Name == "ErrorPrompt" then
-                task.wait(2 + math.random() * 2)
-                queueSelf()
-                pcall(TeleportService.Teleport, TeleportService, Config.PlaceId, LocalPlayer)
-            end
-        end)
+    if syn and type(syn.protect_gui) == "function" then
+        local holder = Instance.new("ScreenGui")
+        holder.Name = "AutoExecHolder"
+        holder.ResetOnSpawn = false
+        syn.protect_gui(holder)
+        holder.Parent = CoreGui
+    elseif type(gethui) == "function" then
+        local holder = Instance.new("ScreenGui")
+        holder.Name = "AutoExecHolder"
+        holder.ResetOnSpawn = false
+        holder.Parent = gethui()
     end
 end)
 
-local function evaluateAltDominance()
-    if not altIndex then
-        return
-    end
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            local otherIndex = altNumberOf(player.Name)
-            if otherIndex and otherIndex < altIndex then
-                serverHop()
-                return
-            end
-        end
-    end
-end
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui", 60)
+if not PlayerGui then return end
 
-evaluateAltDominance()
-
-Players.PlayerAdded:Connect(function(player)
-    if altNumberOf(player.Name) then
-        evaluateAltDominance()
-    end
-end)
-
-local begMessages = {
-    "hi everyone, does anyone have a spare weapon they could gift me? thank you",
-    "hello, would anyone be willing to give me a free knife or gun? i really appreciate it",
-    "hey guys, is anyone able to spare a pet or weapon for me? thanks in advance",
-    "hi, if anyone has an extra weapon they dont need i would be very grateful",
-    "hello everyone, could someone please gift me a free weapon? thank you so much",
-    "excuse me, does anybody have a spare item they could give me? thanks",
-    "can anybody give me a free godly pls",
-    "pls can somebody give me a free godly i really want one",
-    "PLS anyone give me a free godly i will be so happy",
-    "can anyone give me a free godly pls pls pls",
-    "omg does anybody have a free godly they can give me pls",
-    "anyone got a free godly they dont need pls",
-}
-
-local thankMessages = { "tysm!", "omg thanks", "thank you", "thanks so much", "wow thank you!", "thank youu" }
-local tradeReplies = { "ok trade me", "ok send me a trade", "trade me please", "ok trade me thank you" }
-
-local function sendMessage(text)
-    for _ = 1, 4 do
-        local ok = pcall(function()
-            if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
-                local channels = TextChatService:FindFirstChild("TextChannels")
-                local channel = channels and channels:FindFirstChild("RBXGeneral")
-                if not channel then
-                    error("channel missing")
-                end
-                channel:SendAsync(text)
-            else
-                local events = ReplicatedStorage:FindFirstChild("DefaultChatSystemChatEvents")
-                local say = events and events:FindFirstChild("SayMessageRequest")
-                if not say then
-                    error("chat event missing")
-                end
-                say:FireServer(text, "All")
-            end
-        end)
-        if ok then
-            return true
-        end
-        task.wait(1.5)
-    end
-    return false
-end
-
-local function compilePatterns(words)
-    local patterns = {}
-    for _, word in ipairs(words) do
-        table.insert(patterns, "%f[%w]" .. word .. "%f[%W]")
-    end
-    return patterns
-end
-
-local hardPatterns = compilePatterns({
-    "report", "reported", "reporting", "moderator", "moderators", "admin", "admins", "mod", "mods",
-})
-
-local botPatterns = compilePatterns({
-    "bot", "bots", "botting", "ai", "macro", "macros", "autoclicker", "automated", "automation",
-    "script", "scripted", "scripter", "scripting", "exploiter", "exploiting", "hacker", "hacking",
-    "alt", "alts", "cheater", "cheating", "scam", "scammer", "scamming", "ban", "banned",
-})
-
-local targetPatterns = compilePatterns({ "you", "u", "ur", "your", "youre", "ya", "yall" })
-
-local function matchesAny(patterns, text)
-    for _, pattern in ipairs(patterns) do
-        if string.find(text, pattern) then
-            return true
-        end
-    end
-    return false
-end
-
-local function isDanger(text)
-    local lower = string.lower(text)
-    if matchesAny(hardPatterns, lower) then
-        return true
-    end
-    if matchesAny(botPatterns, lower) then
-        if matchesAny(targetPatterns, lower) then
-            return true
-        end
-        if string.find(lower, string.lower(LocalPlayer.Name), 1, true) then
-            return true
-        end
-        local display = string.lower(LocalPlayer.DisplayName)
-        if #display >= 3 and string.find(lower, display, 1, true) then
-            return true
-        end
-    end
-    return false
-end
-
-local offerPrefixes = { "i can", "i got", "i have", "i ll", "ill", "sure", "ok", "okay", "me", "yes", "yeah", "yep", "yea", "bet", "alright", "allright" }
-
-local function normalizeText(text)
-    local s = string.lower(text)
-    s = string.gsub(s, "%p", " ")
-    s = string.gsub(s, "%s+", " ")
-    return string.match(s, "^%s*(.-)%s*$")
-end
-
-local function isTradeOffer(text)
-    if #text > 45 then
-        return false
-    end
-    local s = normalizeText(text)
-    if s == "" then
-        return false
-    end
-    local _, spaces = string.gsub(s, " ", "")
-    if spaces > 3 then
-        return false
-    end
-    for _, prefix in ipairs(offerPrefixes) do
-        if s == prefix or string.sub(s, 1, #prefix + 1) == prefix .. " " then
-            return true
-        end
-    end
-    return false
-end
-
-local replyCooldown = {}
-local lastReplyAt = 0
-local recentReplies = {}
-
-local function onChat(player, text)
-    if not player or player == LocalPlayer or type(text) ~= "string" then
-        return
-    end
-    if altNumberOf(player.Name) then
-        return
-    end
-    local busy = isTradeActive() or Hopping
-    if isDanger(text) then
-        if not busy then
-            serverHop()
-        end
-        return
-    end
-    if busy or not isTradeOffer(text) then
-        return
-    end
-    local now = tick()
-    if (replyCooldown[player.UserId] and now - replyCooldown[player.UserId] < 25) or now - lastReplyAt < 8 then
-        return
-    end
-    replyCooldown[player.UserId] = now
-    lastReplyAt = now
-    holdUntil = math.max(holdUntil, now + 35)
-    task.spawn(function()
-        task.wait(1.5 + math.random() * 2)
-        if not isTradeActive() and not Hopping then
-            sendMessage(pickUnique(tradeReplies, recentReplies, 2))
-        end
-    end)
-end
-
-if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+local function isTradeActive()
+    local active = false
     pcall(function()
-        TextChatService.MessageReceived:Connect(function(message)
-            local source = message.TextSource
-            if source then
-                onChat(Players:GetPlayerByUserId(source.UserId), message.Text)
-            end
-        end)
-    end)
-else
-    local function attach(player)
-        if player ~= LocalPlayer then
-            player.Chatted:Connect(function(text)
-                onChat(player, text)
-            end)
+        local tradeGui = PlayerGui:FindFirstChild("TradeGUI")
+        if tradeGui and tradeGui.Enabled then
+            local container = tradeGui:FindFirstChild("Container")
+            if container and container.Visible then active = true end
         end
-    end
-    for _, player in ipairs(Players:GetPlayers()) do
-        attach(player)
-    end
-    Players.PlayerAdded:Connect(attach)
+    end)
+    return active
 end
 
-local rarityRank = { Common = 1, Uncommon = 2, Rare = 3, Legendary = 4, Godly = 5, Ancient = 6, Unique = 7 }
-local rarityIcon = {
-    Common = "⚪",
-    Uncommon = "🔵",
-    Rare = "🟢",
-    Legendary = "🔴",
-    Godly = "🌸",
-    Ancient = "🟣",
-    Unique = "⭐",
-}
+local thankMessages = {"thanks bro", "yo tysm", "tysm man", "yoo thanks bro"}
 
-local function getRarity(color)
-    if not color then
-        return "Unique"
+local function sendMessage(msg)
+    pcall(function()
+        if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+            local channels = TextChatService:FindFirstChild("TextChannels")
+            if channels then
+                local channel = channels:FindFirstChild("RBXGeneral")
+                if channel and type(channel.SendAsync) == "function" then channel:SendAsync(msg) end
+            end
+        else
+            local chatEvent = ReplicatedStorage:FindFirstChild("DefaultChatSystemChatEvents")
+            if chatEvent then
+                local sayReq = chatEvent:FindFirstChild("SayMessageRequest")
+                if sayReq and type(sayReq.FireServer) == "function" then sayReq:FireServer(msg, "All") end
+            end
+        end
+    end)
+end
+
+local function fireGuiButton(button)
+    if not button or not button:IsA("GuiButton") then return end
+    pcall(function()
+        if type(getconnections) == "function" then
+            for _, conn in ipairs(getconnections(button.MouseButton1Click)) do
+                if conn.Fire then conn:Fire() end
+            end
+        end
+    end)
+    pcall(function()
+        if type(firesignal) == "function" then
+            firesignal(button.MouseButton1Click)
+            firesignal(button.Activated)
+        end
+    end)
+end
+
+local function checkDangerWords(text)
+    local lowerText = string.lower(text)
+    local words = {"bot", "ai", "report", "ban", "scam", "hacker", "hack", "automated", "macro", "autoclicker", "alt", "detector", "exploiter", "exploit", "cheater", "cheat", "botting", "moderator", "mod", "admin"}
+    for _, word in ipairs(words) do
+        if string.find(lowerText, word) then return true end
     end
-    local r = math.floor(color.R * 255 + 0.5)
-    local g = math.floor(color.G * 255 + 0.5)
-    local b = math.floor(color.B * 255 + 0.5)
-    local function match(r1, g1, b1)
-        return math.abs(r - r1) <= 10 and math.abs(g - g1) <= 10 and math.abs(b - b1) <= 10
+    return false
+end
+
+local function isValidTradeResponse(msg)
+    local lower = string.lower(string.gsub(msg, "^%s*(.-)%s*$", "%1"))
+    local phrases = {"me", "ok", "sure", "alright", "allright", "ok bet", "i can", "i got", "bet", "yep", "yeah", "i do"}
+    for _, phrase in ipairs(phrases) do
+        if lower == phrase then return true end
     end
+    return false
+end
+
+local lastTradeResponseTime = 0
+
+local function setupChatListener()
+    local function processMsg(senderId, msgText)
+        if senderId == LocalPlayer.UserId then return end
+        if checkDangerWords(msgText) then
+            if not isTradeActive() then serverHop() end
+            return
+        end
+        if isValidTradeResponse(msgText) then
+            if not isTradeActive() then
+                local currentTime = tick()
+                if currentTime - lastTradeResponseTime >= 10 then
+                    lastTradeResponseTime = currentTime
+                    task.spawn(function()
+                        task.wait(1.5)
+                        sendMessage("ok trade me")
+                    end)
+                end
+            end
+        end
+    end
+
+    pcall(function()
+        if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+            TextChatService.TextChannels.RBXGeneral.MessageReceived:Connect(function(msg)
+                if msg.TextSource then processMsg(msg.TextSource.UserId, msg.Text) end
+            end)
+        else
+            local function attachPlayerChat(player)
+                player.Chatted:Connect(function(msg) processMsg(player.UserId, msg) end)
+            end
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= LocalPlayer then attachPlayerChat(player) end
+            end
+            Players.PlayerAdded:Connect(attachPlayerChat)
+        end
+    end)
+end
+setupChatListener()
+
+local function getRarity(color3)
+    if not color3 then return "Unique / Classic" end
+    local r, g, b = math.floor(color3.R*255+0.5), math.floor(color3.G*255+0.5), math.floor(color3.B*255+0.5)
+    local function match(r1, g1, b1) return math.abs(r-r1)<=8 and math.abs(g-g1)<=8 and math.abs(b-b1)<=8 end
     if match(106, 106, 106) then return "Common" end
     if match(0, 255, 255) then return "Uncommon" end
     if match(0, 200, 0) then return "Rare" end
     if match(220, 0, 5) then return "Legendary" end
     if match(255, 0, 179) then return "Godly" end
     if match(100, 10, 255) then return "Ancient" end
-    return "Unique"
-end
-
-local function itemScore(item)
-    return (rarityRank[item.Rarity] or 0) + (item.IsChroma and 10 or 0)
-end
-
-local function colorToInt(color)
-    local value = 3447003
-    pcall(function()
-        value = math.floor(color.R * 255 + 0.5) * 65536 + math.floor(color.G * 255 + 0.5) * 256 + math.floor(color.B * 255 + 0.5)
-    end)
-    return value
+    return "Unique / Classic"
 end
 
 local function scanInventory()
     local items = {}
-    local found = false
-    pcall(function()
-        local main = dig(PlayerGui, "MainGUI", "Game", "Inventory", "Main")
-        if not main then
-            return
+    local success = pcall(function()
+        local inventoryUI = PlayerGui:FindFirstChild("MainGUI") and PlayerGui.MainGUI:FindFirstChild("Game") and PlayerGui.MainGUI.Game:FindFirstChild("Inventory")
+        if not inventoryUI or not inventoryUI:FindFirstChild("Main") then return end
+        local function scanFolder(folder)
+            if not folder then return end
+            for _, child in ipairs(folder:GetDescendants()) do
+                if child.Name == "NewItem" and child:IsA("Frame") then
+                    local container = child:FindFirstChild("Container")
+                    local itemNameFrame = child:FindFirstChild("ItemName")
+                    if container and itemNameFrame then
+                        local amountStr = container:FindFirstChild("Amount") and container.Amount:IsA("TextLabel") and container.Amount.Text or ""
+                        local amount = tonumber(string.match(amountStr, "x(%d+)")) or 1
+                        local rarity = getRarity(itemNameFrame.BackgroundColor3)
+                        local isChroma = (child:FindFirstChild("Tags") and child.Tags:FindFirstChild("Chroma")) and "Yes" or "No"
+                        local nameLabel = itemNameFrame:FindFirstChildWhichIsA("TextLabel")
+                        local itemName = (nameLabel and nameLabel.Text ~= "") and nameLabel.Text or "Unknown Item"
+                        items[itemName .. "_" .. rarity .. "_" .. isChroma] = {
+                            Name = itemName, Rarity = rarity, Chroma = isChroma, Amount = amount, Color = itemNameFrame.BackgroundColor3
+                        }
+                    end
+                end
+            end
         end
-        found = true
-        for _, folderName in ipairs({ "Pets", "Weapons", "Knives", "Guns" }) do
-            local folder = main:FindFirstChild(folderName)
-            if folder then
-                for _, child in ipairs(folder:GetDescendants()) do
-                    if child.Name == "NewItem" and child:IsA("Frame") then
-                        local container = child:FindFirstChild("Container")
-                        local nameFrame = child:FindFirstChild("ItemName")
-                        if container and nameFrame then
-                            local amount = 1
-                            local amountLabel = container:FindFirstChild("Amount")
-                            if amountLabel and amountLabel:IsA("TextLabel") then
-                                amount = tonumber(string.match(amountLabel.Text, "x(%d+)")) or 1
+        local main = inventoryUI.Main
+        scanFolder(main:FindFirstChild("Pets"))
+        scanFolder(main:FindFirstChild("Weapons"))
+        scanFolder(main:FindFirstChild("Knives"))
+        scanFolder(main:FindFirstChild("Guns"))
+    end)
+    return items, success and next(items) ~= nil
+end
+
+local WebhookQueue = {}
+local isProcessingQueue = false
+local function processWebhookQueue()
+    if isProcessingQueue then return end
+    isProcessingQueue = true
+    task.spawn(function()
+        while true do
+            pcall(function()
+                if #WebhookQueue > 0 then
+                    local batch = {}
+                    local mentionsEveryone = false
+                    for i = 1, math.min(10, #WebhookQueue) do
+                        local queued = table.remove(WebhookQueue, 1)
+                        local item = queued.Item
+                        local rarityStr = tostring(item.Rarity)
+                        if rarityStr == "Legendary" or rarityStr == "Godly" or rarityStr == "Ancient" or rarityStr == "Unique / Classic" then
+                            local hexColor = string.format("%02X%02X%02X", math.floor(item.Color.R*255), math.floor(item.Color.G*255), math.floor(item.Color.B*255))
+                            table.insert(batch, {
+                                ["title"] = "🎉 New Item Acquired! 🎉",
+                                ["description"] = string.format("**Account:** %s\n**Item:** %s\n**Rarity:** %s\n**Chroma:** %s\n**Gained:** %d\n**Total:** %d", LocalPlayer.Name, item.Name, rarityStr, item.Chroma, queued.Gained, item.Amount),
+                                ["color"] = tonumber(hexColor, 16) or 3447003
+                            })
+                            if rarityStr ~= "Legendary" then mentionsEveryone = true end
+                        end
+                    end
+                    if #batch > 0 then
+                        local payload = { ["embeds"] = batch }
+                        if mentionsEveryone then payload["content"] = "@everyone" end
+                        
+                        -- Execute webhook explicitly
+                        pcall(function()
+                            local req = (request or http_request or (syn and syn.request) or (fluxus and fluxus.request))
+                            if type(req) == "function" then
+                                req({Url = WebhookURL, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = HttpService:JSONEncode(payload)})
+                            else
+                                game:HttpPost(WebhookURL, HttpService:JSONEncode(payload), "application/json")
                             end
-                            local itemName = "Unknown Item"
-                            local nameLabel = nameFrame:FindFirstChildWhichIsA("TextLabel")
-                            if nameLabel and nameLabel.Text ~= "" then
-                                itemName = nameLabel.Text
+                        end)
+                    end
+                end
+            end)
+            if #WebhookQueue == 0 then break end
+            task.wait(1.5)
+        end
+        isProcessingQueue = false
+    end)
+end
+
+local baselineInventory = {}
+local inventoryInitialized = false
+local hasThankedThisTrade = false
+
+task.spawn(function()
+    while true do
+        pcall(function()
+            local currentItems, uiFound = scanInventory()
+            if uiFound then
+                if not inventoryInitialized then
+                    for k, v in pairs(currentItems) do baselineInventory[k] = v.Amount end
+                    inventoryInitialized = true
+                else
+                    local gainedAny = false
+                    for k, v in pairs(currentItems) do
+                        local oldAmount = baselineInventory[k] or 0
+                        if v.Amount > oldAmount then
+                            baselineInventory[k] = v.Amount
+                            table.insert(WebhookQueue, { Item = v, Gained = v.Amount - oldAmount })
+                            processWebhookQueue()
+                            gainedAny = true
+                        elseif v.Amount < oldAmount then
+                            baselineInventory[k] = v.Amount
+                        end
+                    end
+                    if gainedAny and not hasThankedThisTrade then
+                        hasThankedThisTrade = true
+                        task.spawn(function()
+                            task.wait(1.5)
+                            sendMessage(thankMessages[math.random(1, #thankMessages)])
+                        end)
+                    end
+                end
+            end
+        end)
+        task.wait(1)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        pcall(function()
+            local joinGui = PlayerGui:FindFirstChild("Join")
+            if joinGui then
+                local playBtn = joinGui:FindFirstChild("Friends") and joinGui.Friends:FindFirstChild("Play")
+                if playBtn and playBtn.Visible then fireGuiButton(playBtn) end
+            end
+            local crossPlatform = PlayerGui:FindFirstChild("CrossPlatform")
+            if crossPlatform then
+                local claimBtn = crossPlatform:FindFirstChild("NewItem") and crossPlatform.NewItem:FindFirstChild("Medium") and crossPlatform.NewItem.Medium:FindFirstChild("Container") and crossPlatform.NewItem.Medium.Container:FindFirstChild("Claim")
+                if claimBtn and claimBtn.Visible then fireGuiButton(claimBtn) end
+            end
+            local mainGui = PlayerGui:FindFirstChild("MainGUI")
+            if mainGui then
+                local gameFrame = mainGui:FindFirstChild("Main") or mainGui:FindFirstChild("Game")
+                if gameFrame then
+                    local leaderboard = gameFrame:FindFirstChild("Leaderboard")
+                    if leaderboard then
+                        local container = leaderboard:FindFirstChild("Container")
+                        if container then
+                            local tradeReq = container:FindFirstChild("TradeRequest")
+                            if tradeReq then
+                                local receiving = tradeReq:FindFirstChild("ReceivingRequest")
+                                if receiving then
+                                    local acceptBtn = receiving:FindFirstChild("Accept")
+                                    if acceptBtn and acceptBtn:IsA("GuiButton") and acceptBtn.Visible then
+                                        fireGuiButton(acceptBtn)
+                                    end
+                                end
                             end
-                            local tags = child:FindFirstChild("Tags")
-                            local isChroma = tags ~= nil and tags:FindFirstChild("Chroma") ~= nil
-                            local rarity = getRarity(nameFrame.BackgroundColor3)
-                            items[itemName .. "_" .. rarity .. (isChroma and "_Chroma" or "")] = {
-                                Name = itemName,
-                                Rarity = rarity,
-                                Amount = amount,
-                                Color = nameFrame.BackgroundColor3,
-                                IsChroma = isChroma,
-                            }
                         end
                     end
                 end
             end
-        end
-    end)
-    return items, found
-end
-
-local function diffInventory(before)
-    local after, found = scanInventory()
-    local gained = {}
-    if not found then
-        return gained
-    end
-    for key, item in pairs(after) do
-        local previous = before[key] and before[key].Amount or 0
-        if item.Amount > previous then
-            table.insert(gained, {
-                Name = item.Name,
-                Rarity = item.Rarity,
-                Color = item.Color,
-                IsChroma = item.IsChroma,
-                Gained = item.Amount - previous,
-                Total = item.Amount,
-            })
-        end
-    end
-    table.sort(gained, function(a, b)
-        local sa, sb = itemScore(a), itemScore(b)
-        if sa ~= sb then
-            return sa > sb
-        end
-        if a.Gained ~= b.Gained then
-            return a.Gained > b.Gained
-        end
-        return a.Name < b.Name
-    end)
-    return gained
-end
-
-local function sendWebhook(payload)
-    if not requestFunc or Config.WebhookURL == "" then
-        return true, 0
-    end
-    local ok, res = pcall(requestFunc, {
-        Url = Config.WebhookURL,
-        Method = "POST",
-        Headers = { ["Content-Type"] = "application/json" },
-        Body = HttpService:JSONEncode(payload),
-    })
-    if not ok or not res then
-        return false, 3
-    end
-    local code = res.StatusCode or 0
-    if code >= 200 and code < 300 then
-        return true, 0
-    end
-    if code == 429 then
-        local delay = 3
-        pcall(function()
-            local decoded = HttpService:JSONDecode(res.Body)
-            if decoded and decoded.retry_after then
-                delay = decoded.retry_after + 0.5
-            end
         end)
-        return false, delay
-    end
-    return true, 0
-end
-
-local function postTradeSuccess(gained, partner)
-    local totalAmount = 0
-    local mention = false
-    for _, item in ipairs(gained) do
-        totalAmount = totalAmount + item.Gained
-        if item.IsChroma or item.Rarity == "Godly" or item.Rarity == "Ancient" or item.Rarity == "Unique" then
-            mention = true
-        end
-    end
-
-    local timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
-    local shown = math.min(Config.MaxItemsShown, #gained)
-    local embeds = {}
-
-    table.insert(embeds, {
-        title = "🎉 Trade Successful 🎉",
-        description = string.format(
-            "**Account:** %s\n**From:** %s\n**Total Items Received:** %d\n**Server:** `%s`",
-            LocalPlayer.Name,
-            tostring(partner or "Unknown"),
-            totalAmount,
-            tostring(game.JobId)
-        ),
-        color = colorToInt(gained[1].Color),
-        timestamp = timestamp,
-    })
-
-    for index = 1, shown do
-        local item = gained[index]
-        local embed = {
-            title = string.format("%s  #%d  %s", rarityIcon[item.Rarity] or "⭐", index, item.Name),
-            color = colorToInt(item.Color),
-            fields = {
-                { name = "Rarity", value = item.Rarity, inline = true },
-                { name = "Chroma", value = item.IsChroma and "Yes" or "No", inline = true },
-                { name = "Amount Gained", value = "x" .. tostring(item.Gained), inline = true },
-                { name = "Total Owned Now", value = "x" .. tostring(item.Total), inline = true },
-            },
-        }
-        if index == shown and #gained > shown then
-            embed.footer = { text = string.format("+%d more item type(s) not shown", #gained - shown) }
-        end
-        table.insert(embeds, embed)
-    end
-
-    local payload = {
-        embeds = embeds,
-        allowed_mentions = { parse = mention and { "everyone" } or {} },
-    }
-    if mention then
-        payload.content = "@everyone"
-    end
-    for _ = 1, 4 do
-        local ok, delay = sendWebhook(payload)
-        if ok then
-            return
-        end
-        task.wait(delay > 0 and delay or 3)
-    end
-end
-
-local lastThanksAt = 0
-local recentThanks = {}
-
-local function sendThanks()
-    if tick() - lastThanksAt < 20 then
-        return
-    end
-    lastThanksAt = tick()
-    task.spawn(function()
-        task.wait(1.5 + math.random() * 2)
-        sendMessage(pickUnique(thankMessages, recentThanks, 3))
-    end)
-end
-
-local function fireGuiButton(button)
-    if not button or not button:IsA("GuiButton") or not button.Visible then
-        return false
-    end
-    if type(getconnections) == "function" then
-        for _, signal in ipairs({ button.MouseButton1Click, button.Activated }) do
-            local ok, connections = pcall(getconnections, signal)
-            if ok and type(connections) == "table" and #connections > 0 then
-                for _, connection in ipairs(connections) do
-                    pcall(function()
-                        connection:Fire()
-                    end)
-                end
-                return true
-            end
-        end
-    end
-    if type(firesignal) == "function" then
-        return (pcall(firesignal, button.MouseButton1Click))
-    end
-    return false
-end
-
-local lastClick = {}
-
-local function clickOnce(key, button, gap)
-    if tick() - (lastClick[key] or 0) < gap then
-        return
-    end
-    if fireGuiButton(button) then
-        lastClick[key] = tick()
-    end
-end
-
-local function detectPartner()
-    local gui = PlayerGui:FindFirstChild("TradeGUI")
-    if not gui then
-        return nil
-    end
-    for _, descendant in ipairs(gui:GetDescendants()) do
-        if descendant:IsA("TextLabel") and descendant.Text ~= "" then
-            local text = string.lower(descendant.Text)
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player ~= LocalPlayer then
-                    local name = string.lower(player.Name)
-                    local display = string.lower(player.DisplayName)
-                    if (#name >= 3 and string.find(text, name, 1, true)) or (#display >= 3 and string.find(text, display, 1, true)) then
-                        return player.Name
-                    end
-                end
-            end
-        end
-    end
-    return nil
-end
-
-local function finishTrade(before, partner, confirmed)
-    if finishingTrade then
-        return
-    end
-    finishingTrade = true
-    task.wait(1.5)
-    local gained = {}
-    if before then
-        for _ = 1, 6 do
-            gained = diffInventory(before)
-            if #gained > 0 then
-                break
-            end
-            task.wait(1.5)
-        end
-    end
-    if #gained > 0 then
-        postTradeSuccess(gained, partner)
-        sendThanks()
-        task.wait(8 + math.random() * 6)
-    elseif confirmed then
-        sendThanks()
-        task.wait(8 + math.random() * 6)
-    else
-        task.wait(1 + math.random() * 2)
-    end
-    finishingTrade = false
-    serverHop()
-end
-
-local state = {
-    openedAt = nil,
-    acceptDelay = 3,
-    requestAt = nil,
-    requestDelay = 1,
-    partner = nil,
-    snapshot = nil,
-    reachedConfirm = false,
-}
-
-task.spawn(function()
-    local wasActive = false
-    local inactiveSince = nil
-    while true do
-        task.wait(0.25)
-        pcall(function()
-            local claim = dig(PlayerGui, "CrossPlatform", "NewItem", "Medium", "Container", "Claim")
-            if claim then
-                clickOnce("claim", claim, 0.5)
-            end
-
-            local request = dig(PlayerGui, "MainGUI", "Game", "Leaderboard", "Container", "TradeRequest", "ReceivingRequest")
-            if request and request.Visible then
-                if not state.requestAt then
-                    state.requestAt = tick()
-                    state.requestDelay = 0.8 + math.random() * 0.9
-                elseif tick() - state.requestAt >= state.requestDelay then
-                    clickOnce("request", request:FindFirstChild("Accept"), 2)
-                end
-            else
-                state.requestAt = nil
-            end
-
-            if tradeWindowOpen() then
-                if not state.openedAt then
-                    state.openedAt = tick()
-                    state.acceptDelay = 2.5 + math.random() * 1.5
-                    state.snapshot = nil
-                    state.reachedConfirm = false
-                end
-                local elapsed = tick() - state.openedAt
-                if not state.snapshot and elapsed < state.acceptDelay then
-                    local items, found = scanInventory()
-                    if found then
-                        state.snapshot = items
-                    end
-                end
-                if not state.partner and elapsed > 1 then
-                    state.partner = detectPartner()
-                end
-                local actions = dig(PlayerGui, "TradeGUI", "Container", "Trade", "Actions")
-                local confirmButton = dig(actions, "Accept", "Confirm", "ActionButton")
-                if confirmButton and confirmButton.Visible then
-                    state.reachedConfirm = true
-                end
-                if elapsed >= state.acceptDelay then
-                    clickOnce("accept", dig(actions, "Accept", "ActionButton"), 1.5)
-                    clickOnce("confirm", confirmButton, 1.5)
-                end
-                if elapsed >= 75 then
-                    clickOnce("decline", dig(actions, "Decline", "ActionButton"), 3)
-                end
-            else
-                state.openedAt = nil
-            end
-
-            if isTradeActive() then
-                wasActive = true
-                inactiveSince = nil
-            elseif wasActive then
-                inactiveSince = inactiveSince or tick()
-                if tick() - inactiveSince >= 2 then
-                    wasActive = false
-                    inactiveSince = nil
-                    local before, partner, confirmed = state.snapshot, state.partner, state.reachedConfirm
-                    state.snapshot = nil
-                    state.partner = nil
-                    state.reachedConfirm = false
-                    task.spawn(finishTrade, before, partner, confirmed)
-                end
-            end
-        end)
+        task.wait(0.5)
     end
 end)
 
-local function holdWait(seconds)
-    local remaining = seconds
-    while remaining > 0 do
-        task.wait(0.25)
-        if Hopping then
-            return false
-        end
-        if not isTradeActive() and not finishingTrade and tick() >= holdUntil then
-            remaining = remaining - 0.25
-        end
+task.spawn(function()
+    local tradeOpenTime = 0
+    local wasTradeOpen = false
+    while true do
+        pcall(function()
+            if isTradeActive() then
+                if not wasTradeOpen then
+                    tradeOpenTime = tick()
+                    wasTradeOpen = true
+                end
+                if tick() - tradeOpenTime >= 2.0 then
+                    local tradeGui = PlayerGui:FindFirstChild("TradeGUI")
+                    if tradeGui then
+                        local container = tradeGui:FindFirstChild("Container")
+                        if container then
+                            local tradeFrame = container:FindFirstChild("Trade")
+                            if tradeFrame then
+                                local actions = tradeFrame:FindFirstChild("Actions")
+                                if actions then
+                                    local acceptFolder = actions:FindFirstChild("Accept")
+                                    if acceptFolder then
+                                        if acceptFolder:FindFirstChild("Cancel") and acceptFolder.Cancel:FindFirstChild("ActionButton") then
+                                            acceptFolder.Cancel.ActionButton:Destroy()
+                                        end
+                                        local btn = acceptFolder:FindFirstChild("ActionButton")
+                                        if btn and btn:IsA("GuiButton") and btn.Visible then
+                                            fireGuiButton(btn)
+                                        end
+                                        local confirmFolder = acceptFolder:FindFirstChild("Confirm")
+                                        if confirmFolder then
+                                            local confirmBtn = confirmFolder:FindFirstChild("ActionButton")
+                                            if confirmBtn and confirmBtn:IsA("GuiButton") and confirmBtn.Visible then
+                                                fireGuiButton(confirmBtn)
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            else
+                wasTradeOpen = false
+            end
+        end)
+        task.wait(0.2)
     end
-    return not Hopping
-end
+end)
 
 task.spawn(function()
-    local recentBegs = {}
-    if not holdWait(Config.FirstMessageDelay) then
-        return
+    local joinTime = tick()
+    local msg1Sent = false
+    local msg2Sent = false
+    local wasTrading = false
+    local tradeEndedTime = 0
+    local hasTradedInServer = false
+    
+    local msgs = {
+        "can somebody give me a free weapon please",
+        "can anybody give me a free pet or weapon please",
+        "can anybody give me a pet or a gun or a knife please",
+        "anybody have any free godly I can have"
+    }
+
+    while true do
+        pcall(function()
+            if not getgenv().IsHopping then
+                if isTradeActive() then
+                    hasTradedInServer = true
+                    wasTrading = true
+                else
+                    if wasTrading then
+                        wasTrading = false
+                        tradeEndedTime = tick()
+                        hasThankedThisTrade = false
+                    end
+                    
+                    local elapsedSinceJoin = tick() - joinTime
+                    
+                    if not msg1Sent and elapsedSinceJoin >= 1 then
+                        sendMessage(msgs[math.random(1, #msgs)])
+                        msg1Sent = true
+                    end
+                    
+                    if not msg2Sent and elapsedSinceJoin >= 40 then
+                        sendMessage(msgs[math.random(1, #msgs)])
+                        msg2Sent = true
+                    end
+                    
+                    if hasTradedInServer then
+                        if tick() - tradeEndedTime >= 10 then
+                            serverHop()
+                        end
+                    else
+                        if elapsedSinceJoin >= 70 then
+                            serverHop()
+                        end
+                    end
+                end
+            end
+        end)
+        task.wait(0.5)
     end
-    sendMessage(pickUnique(begMessages, recentBegs, 1))
-    if not holdWait(Config.SecondMessageDelay) then
-        return
-    end
-    sendMessage(pickUnique(begMessages, recentBegs, 1))
-    if not holdWait(Config.HopDelay) then
-        return
-    end
-    serverHop()
 end)
