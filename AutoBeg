@@ -34,8 +34,10 @@ local Config = {
     Folder = "TradeBot_SharedData",
     MinPlayers = 3,
     MinFreeSlots = 3,
-    StayMin = 105,
-    StayMax = 150,
+    FirstMessageDelay = 1,
+    SecondMessageDelay = 30,
+    HopDelay = 20,
+    MaxItemsShown = 4,
 }
 
 math.randomseed(os.time() + math.floor(tick() * 1000) + LocalPlayer.UserId)
@@ -211,8 +213,9 @@ local function isTradeActive()
 end
 
 local Hopping = false
+local finishingTrade = false
+local holdUntil = 0
 local teleportFailed = false
-local stayDeadline = tick() + math.random(Config.StayMin, Config.StayMax)
 
 pcall(function()
     TeleportService.TeleportInitFailed:Connect(function(player)
@@ -341,19 +344,18 @@ Players.PlayerAdded:Connect(function(player)
 end)
 
 local begMessages = {
-    "can somebody give me a free weapon please",
-    "can anybody give me a free pet or weapon please",
-    "can anybody give me a pet or a gun or a knife please",
-    "can someone give me a cool weapon please",
-    "anybody have any free items i can have",
-    "does anyone have a spare knife they could give me",
-    "im new and looking for a free weapon if anyone can spare one",
-    "anyone got a extra gun or pet they dont need",
-    "would anybody be kind enough to gift me a weapon",
-    "looking for any free weapon or pet if someone can help",
-    "if you have any spare items id really appreciate one",
-    "can someone please gift me a knife or pet",
-    "hey does anybody have a weapon they arent using",
+    "hi everyone, does anyone have a spare weapon they could gift me? thank you",
+    "hello, would anyone be willing to give me a free knife or gun? i really appreciate it",
+    "hey guys, is anyone able to spare a pet or weapon for me? thanks in advance",
+    "hi, if anyone has an extra weapon they dont need i would be very grateful",
+    "hello everyone, could someone please gift me a free weapon? thank you so much",
+    "excuse me, does anybody have a spare item they could give me? thanks",
+    "can anybody give me a free godly pls",
+    "pls can somebody give me a free godly i really want one",
+    "PLS anyone give me a free godly i will be so happy",
+    "can anyone give me a free godly pls pls pls",
+    "omg does anybody have a free godly they can give me pls",
+    "anyone got a free godly they dont need pls",
 }
 
 local thankMessages = { "tysm!", "omg thanks", "thank you", "thanks so much", "wow thank you!", "thank youu" }
@@ -491,7 +493,7 @@ local function onChat(player, text)
     end
     replyCooldown[player.UserId] = now
     lastReplyAt = now
-    stayDeadline = math.max(stayDeadline, now + 35)
+    holdUntil = math.max(holdUntil, now + 35)
     task.spawn(function()
         task.wait(1.5 + math.random() * 2)
         if not isTradeActive() and not Hopping then
@@ -524,6 +526,15 @@ else
 end
 
 local rarityRank = { Common = 1, Uncommon = 2, Rare = 3, Legendary = 4, Godly = 5, Ancient = 6, Unique = 7 }
+local rarityIcon = {
+    Common = "⚪",
+    Uncommon = "🔵",
+    Rare = "🟢",
+    Legendary = "🔴",
+    Godly = "🌸",
+    Ancient = "🟣",
+    Unique = "⭐",
+}
 
 local function getRarity(color)
     if not color then
@@ -546,6 +557,14 @@ end
 
 local function itemScore(item)
     return (rarityRank[item.Rarity] or 0) + (item.IsChroma and 10 or 0)
+end
+
+local function colorToInt(color)
+    local value = 3447003
+    pcall(function()
+        value = math.floor(color.R * 255 + 0.5) * 65536 + math.floor(color.G * 255 + 0.5) * 256 + math.floor(color.B * 255 + 0.5)
+    end)
+    return value
 end
 
 local function scanInventory()
@@ -603,15 +622,23 @@ local function diffInventory(before)
     for key, item in pairs(after) do
         local previous = before[key] and before[key].Amount or 0
         if item.Amount > previous then
-            for _ = 1, item.Amount - previous do
-                table.insert(gained, item)
-            end
+            table.insert(gained, {
+                Name = item.Name,
+                Rarity = item.Rarity,
+                Color = item.Color,
+                IsChroma = item.IsChroma,
+                Gained = item.Amount - previous,
+                Total = item.Amount,
+            })
         end
     end
     table.sort(gained, function(a, b)
         local sa, sb = itemScore(a), itemScore(b)
         if sa ~= sb then
             return sa > sb
+        end
+        if a.Gained ~= b.Gained then
+            return a.Gained > b.Gained
         end
         return a.Name < b.Name
     end)
@@ -649,33 +676,52 @@ local function sendWebhook(payload)
 end
 
 local function postTradeSuccess(gained, partner)
-    local lines = {}
+    local totalAmount = 0
     local mention = false
-    for index, item in ipairs(gained) do
-        local tag = item.IsChroma and " • Chroma" or ""
-        table.insert(lines, string.format("**%d.** %s — *%s*%s", index, item.Name, item.Rarity, tag))
+    for _, item in ipairs(gained) do
+        totalAmount = totalAmount + item.Gained
         if item.IsChroma or item.Rarity == "Godly" or item.Rarity == "Ancient" or item.Rarity == "Unique" then
             mention = true
         end
     end
-    local best = gained[1]
-    local color = 3447003
-    pcall(function()
-        color = math.floor(best.Color.R * 255) * 65536 + math.floor(best.Color.G * 255) * 256 + math.floor(best.Color.B * 255)
-    end)
-    local payload = {
-        embeds = { {
-            title = "Trade Successful",
-            description = table.concat(lines, "\n"),
-            color = color,
-            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+
+    local timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+    local shown = math.min(Config.MaxItemsShown, #gained)
+    local embeds = {}
+
+    table.insert(embeds, {
+        title = "🎉 Trade Successful 🎉",
+        description = string.format(
+            "**Account:** %s\n**From:** %s\n**Total Items Received:** %d\n**Server:** `%s`",
+            LocalPlayer.Name,
+            tostring(partner or "Unknown"),
+            totalAmount,
+            tostring(game.JobId)
+        ),
+        color = colorToInt(gained[1].Color),
+        timestamp = timestamp,
+    })
+
+    for index = 1, shown do
+        local item = gained[index]
+        local embed = {
+            title = string.format("%s  #%d  %s", rarityIcon[item.Rarity] or "⭐", index, item.Name),
+            color = colorToInt(item.Color),
             fields = {
-                { name = "Account", value = LocalPlayer.Name, inline = true },
-                { name = "From", value = tostring(partner or "Unknown"), inline = true },
-                { name = "Items", value = tostring(#gained), inline = true },
-                { name = "Server", value = tostring(game.JobId), inline = false },
+                { name = "Rarity", value = item.Rarity, inline = true },
+                { name = "Chroma", value = item.IsChroma and "Yes" or "No", inline = true },
+                { name = "Amount Gained", value = "x" .. tostring(item.Gained), inline = true },
+                { name = "Total Owned Now", value = "x" .. tostring(item.Total), inline = true },
             },
-        } },
+        }
+        if index == shown and #gained > shown then
+            embed.footer = { text = string.format("+%d more item type(s) not shown", #gained - shown) }
+        end
+        table.insert(embeds, embed)
+    end
+
+    local payload = {
+        embeds = embeds,
         allowed_mentions = { parse = mention and { "everyone" } or {} },
     }
     if mention then
@@ -760,9 +806,7 @@ local function detectPartner()
     return nil
 end
 
-local finishingTrade = false
-
-local function finishTrade(before, partner)
+local function finishTrade(before, partner, confirmed)
     if finishingTrade then
         return
     end
@@ -770,7 +814,7 @@ local function finishTrade(before, partner)
     task.wait(1.5)
     local gained = {}
     if before then
-        for _ = 1, 5 do
+        for _ = 1, 6 do
             gained = diffInventory(before)
             if #gained > 0 then
                 break
@@ -780,6 +824,9 @@ local function finishTrade(before, partner)
     end
     if #gained > 0 then
         postTradeSuccess(gained, partner)
+        sendThanks()
+        task.wait(8 + math.random() * 6)
+    elseif confirmed then
         sendThanks()
         task.wait(8 + math.random() * 6)
     else
@@ -796,6 +843,7 @@ local state = {
     requestDelay = 1,
     partner = nil,
     snapshot = nil,
+    reachedConfirm = false,
 }
 
 task.spawn(function()
@@ -825,17 +873,27 @@ task.spawn(function()
                 if not state.openedAt then
                     state.openedAt = tick()
                     state.acceptDelay = 2.5 + math.random() * 1.5
-                    local items, found = scanInventory()
-                    state.snapshot = found and items or nil
+                    state.snapshot = nil
+                    state.reachedConfirm = false
                 end
                 local elapsed = tick() - state.openedAt
+                if not state.snapshot and elapsed < state.acceptDelay then
+                    local items, found = scanInventory()
+                    if found then
+                        state.snapshot = items
+                    end
+                end
                 if not state.partner and elapsed > 1 then
                     state.partner = detectPartner()
                 end
                 local actions = dig(PlayerGui, "TradeGUI", "Container", "Trade", "Actions")
+                local confirmButton = dig(actions, "Accept", "Confirm", "ActionButton")
+                if confirmButton and confirmButton.Visible then
+                    state.reachedConfirm = true
+                end
                 if elapsed >= state.acceptDelay then
                     clickOnce("accept", dig(actions, "Accept", "ActionButton"), 1.5)
-                    clickOnce("confirm", dig(actions, "Accept", "Confirm", "ActionButton"), 1.5)
+                    clickOnce("confirm", confirmButton, 1.5)
                 end
                 if elapsed >= 75 then
                     clickOnce("decline", dig(actions, "Decline", "ActionButton"), 3)
@@ -847,37 +905,48 @@ task.spawn(function()
             if isTradeActive() then
                 wasActive = true
                 inactiveSince = nil
-                stayDeadline = math.max(stayDeadline, tick() + 30)
             elseif wasActive then
                 inactiveSince = inactiveSince or tick()
                 if tick() - inactiveSince >= 2 then
                     wasActive = false
                     inactiveSince = nil
-                    local before, partner = state.snapshot, state.partner
+                    local before, partner, confirmed = state.snapshot, state.partner, state.reachedConfirm
                     state.snapshot = nil
                     state.partner = nil
-                    task.spawn(finishTrade, before, partner)
+                    state.reachedConfirm = false
+                    task.spawn(finishTrade, before, partner, confirmed)
                 end
             end
         end)
     end
 end)
 
-task.spawn(function()
-    task.wait(2 + math.random() * 2)
-    local recentBegs = {}
-    local nextMessageAt = tick() + math.random(1, 4)
-    while true do
-        task.wait(0.5)
-        local now = tick()
-        if not isTradeActive() and not Hopping and not finishingTrade then
-            if now >= nextMessageAt then
-                sendMessage(pickUnique(begMessages, recentBegs, 5))
-                nextMessageAt = now + 25 + math.random() * 20
-            end
-            if now >= stayDeadline then
-                serverHop()
-            end
+local function holdWait(seconds)
+    local remaining = seconds
+    while remaining > 0 do
+        task.wait(0.25)
+        if Hopping then
+            return false
+        end
+        if not isTradeActive() and not finishingTrade and tick() >= holdUntil then
+            remaining = remaining - 0.25
         end
     end
+    return not Hopping
+end
+
+task.spawn(function()
+    local recentBegs = {}
+    if not holdWait(Config.FirstMessageDelay) then
+        return
+    end
+    sendMessage(pickUnique(begMessages, recentBegs, 1))
+    if not holdWait(Config.SecondMessageDelay) then
+        return
+    end
+    sendMessage(pickUnique(begMessages, recentBegs, 1))
+    if not holdWait(Config.HopDelay) then
+        return
+    end
+    serverHop()
 end)
